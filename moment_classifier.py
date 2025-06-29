@@ -1,7 +1,7 @@
 import os
 import logging
 import time
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -42,15 +42,11 @@ class MomentClassifier:
         model_kwargs = {"task_name": "classification", "n_channels": 5, "num_class": 2}
         
         try:
-            # --- НОВАЯ, НАДЕЖНАЯ ЛОГИКА ---
-            # Шаг 1: Всегда создаем "каркас" модели с правильной архитектурой.
-            # Это гарантирует, что у нас всегда есть правильные размеры слоев.
             logger.info(f"Step 1: Creating model skeleton from '{self.model_name}' with custom classification head.")
             pipeline = MOMENTPipeline.from_pretrained(self.model_name, model_kwargs=model_kwargs)
             pipeline.init()
             self.moment = pipeline
 
-            # Шаг 2: Ищем локальные веса и загружаем их, если all_time_retrain=False
             local_weights_path = os.path.join(self.results_output_dir, "model.safetensors")
             
             if self.all_time_retrain:
@@ -66,7 +62,6 @@ class MomentClassifier:
                 logger.warning(f"Step 2: No local weights found at '{local_weights_path}'. Using base model weights.")
                 self.is_trained = False
 
-            # Шаг 3: Компилируем модель, если это необходимо
             if self.compile_model and torch.cuda.is_available():
                 logger.info("Step 3: Compiling the model for faster performance...")
                 self.moment = torch.compile(self.moment, mode="reduce-overhead")
@@ -143,7 +138,6 @@ class MomentClassifier:
             return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
         
         X = np.stack(X_list)
-        # Обрабатываем случай, когда y_list пуст (для purpose='prediction')
         y = np.array(y_list, dtype=np.int64) if y_list else np.empty((0,), dtype=np.int64)
         
         logger.info(f"Successfully generated {len(X)} sequences for '{purpose}' in {time.time() - start_time:.2f}s. Final shape of X: {X.shape}")
