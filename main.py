@@ -102,8 +102,8 @@ def init_models_once():
 
     try:
         config_long_tf = {
-            "seq_len": long_config.get("seq_len", 64),
-            "results_output_dir": long_config.get("results_output_dir", "moment_model"),
+            "seq_len": long_config.get("seq_len", 512),
+            "results_output_dir": long_config.get("results_output_dir", "1h_4pred"),
             "model_name": long_config.get("model_name", "AutonLab/MOMENT-1-large"),
             "prediction_length": long_config.get("prediction_length", 1),
             "all_time_retrain": ALL_TIME_RETRAIN,

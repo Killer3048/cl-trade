@@ -1,77 +1,124 @@
-import argparse
+import os
+import json
+import logging
+import time
 import pandas as pd
-from sklearn.metrics import accuracy_score
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
 from moment_classifier import MomentClassifier
 
+# --- НОВЫЙ БЛОК: ЕДИНЫЙ ИСТОЧНИК КОНФИГУРАЦИИ ---
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+try:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        CONFIG = json.load(f)
+except FileNotFoundError:
+    logging.critical(f"Конфигурационный файл не найден по пути: {CONFIG_PATH}")
+    exit(1)
+# ---------------------------------------------------
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 def split_by_item(df: pd.DataFrame, test_ratio: float = 0.2):
-    train_parts = []
-    test_parts = []
-    for item_id, group in df.groupby("item_id"):
-        group = group.sort_values("timestamp")
+    logging.info(f"Splitting data with test_ratio={test_ratio}...")
+    train_parts, test_parts = [], []
+    for _, group in df.groupby("item_id"):
+        group = group.sort_values('timestamp')
+        if len(group) < 50: 
+            continue
         split_idx = int(len(group) * (1 - test_ratio))
         train_parts.append(group.iloc[:split_idx])
         test_parts.append(group.iloc[split_idx:])
+    
+    if not train_parts or not test_parts:
+        raise ValueError("Could not split data. Check if input CSV has enough data and 'item_id' column.")
+        
     train_df = pd.concat(train_parts).reset_index(drop=True)
     test_df = pd.concat(test_parts).reset_index(drop=True)
+    logging.info(f"Split complete. Train records: {len(train_df)}, Test records: {len(test_df)}")
     return train_df, test_df
 
-
-def evaluate(model: MomentClassifier, df: pd.DataFrame) -> float:
-    X, y = model._build_sequences(df)
-    if len(y) == 0:
-        return 0.0
+def evaluate(model: MomentClassifier, df: pd.DataFrame, num_workers: int = 0) -> float:
+    logging.info("Starting final evaluation...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dataset = TensorDataset(
-        torch.tensor(X, dtype=torch.float32),
-        torch.tensor(y, dtype=torch.long),
-    )
-    loader = DataLoader(dataset, batch_size=model.batch_size, shuffle=False)
+    
+    X, y, _ = model._build_sequences(df, purpose="evaluation")
+    if y.size == 0:
+        logging.warning("No sequences generated for evaluation. Returning 0.0 accuracy.")
+        return 0.0
+        
+    dataset = torch.utils.data.TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
+    loader = torch.utils.data.DataLoader(dataset, batch_size=model.batch_size, num_workers=num_workers, pin_memory=True)
+    
     model.moment.to(device)
-    model.moment.eval()
-    preds = []
-    with torch.no_grad():
-        for batch_x, _ in loader:
-            batch_x = batch_x.to(device)
-            mask = torch.ones(batch_x.shape[0], model.seq_len, dtype=torch.long).to(device)
-            logits = model.moment(x_enc=batch_x, input_mask=mask).logits
-            preds.append(logits.argmax(dim=1).cpu())
-    preds = torch.cat(preds).numpy()
-    return accuracy_score(y, preds)
-
+    return model.evaluate_on_loader(loader, device)
 
 def main():
-    parser = argparse.ArgumentParser(description="Train MOMENT classifier")
-    parser.add_argument("csv_path", help="CSV file with columns item_id, timestamp, open, high, low, close, volume")
-    parser.add_argument("--output_dir", default="moment_model")
-    parser.add_argument("--seq_len", type=int, default=64)
-    parser.add_argument("--prediction_length", type=int, default=1)
-    parser.add_argument("--model_name", default="AutonLab/MOMENT-1-large")
-    args = parser.parse_args()
-
-    df = pd.read_csv(args.csv_path, parse_dates=["timestamp"])
-    train_df, test_df = split_by_item(df)
-
-    config = {
-        "seq_len": args.seq_len,
-        "results_output_dir": args.output_dir,
-        "model_name": args.model_name,
-        "prediction_length": args.prediction_length,
-        "all_time_retrain": False,
+    setup_logging()
+    
+    # --- НОВЫЙ БЛОК: КОНФИГУРАЦИЯ ИЗ ФАЙЛА ---
+    logging.info("--- Starting Training Script ---")
+    logging.info(f"Loading configuration from {CONFIG_PATH}")
+    
+    # Путь к данным для обучения. Измените его здесь, если нужно.
+    csv_path = "full_1h.csv"
+    
+    # Используем конфигурацию для LONG_TF из основного конфига
+    tf_config = CONFIG["timeframe_config"]["LONG_TF"]
+    
+    training_config = {
+        "seq_len": tf_config.get("seq_len", 512),
+        "prediction_length": tf_config.get("prediction_length", 1),
+        "results_output_dir": tf_config.get("results_output_dir", "1h_4pred"),
+        "model_name": tf_config.get("model_name", "AutonLab/MOMENT-1-large"),
+        "epochs": tf_config.get("epochs", 100),
+        "batch_size": tf_config.get("batch_size", 32),
+        "num_batches_per_epoch": tf_config.get("num_batches_per_epoch", 50),
+        "lr": tf_config.get("lr", 1e-4),
+        "num_workers": tf_config.get("num_workers", 4),
+        "all_time_retrain": True,
+        "save_on_improve": False, 
+        "compile_model": True
     }
-    model = MomentClassifier(config)
-    model.load_model()
-    model.fit(train_df, test_df)
+    logging.info(f"Training configuration: {training_config}")
+    # ---------------------------------------------
+    
+    try:
+        df = pd.read_csv(csv_path, parse_dates=["timestamp"])
+        logging.info(f"Loaded data with {len(df)} rows and {df['item_id'].nunique()} unique items.")
+        train_df, test_df = split_by_item(df)
+    except (FileNotFoundError, ValueError) as e:
+        logging.error(f"FATAL: Error loading or splitting data from '{csv_path}': {e}", exc_info=True)
+        return
 
-    signals = model.predict(test_df)
-    print("Sample signals:", signals)
+    model = MomentClassifier(training_config)
+    
+    try:
+        model.load_model()
+    except Exception as e:
+        logging.error(f"FATAL: Could not proceed because initial model loading failed.", exc_info=True)
+        return
+    
+    fit_start_time = time.time()
+    model.fit(train_df, test_df, num_workers=training_config["num_workers"])
+    logging.info(f"Total fitting process took: {time.time() - fit_start_time:.2f} seconds.")
 
-    acc = evaluate(model, test_df)
-    print(f"Accuracy on test set: {acc:.4f}")
+    logging.info("Reloading the best model for final evaluation...")
+    best_model = MomentClassifier(training_config)
+    try:
+        best_model.load_model()
+    except Exception as e:
+        logging.error(f"FATAL: Could not load the best model for evaluation.", exc_info=True)
+        return
 
+    if not best_model.is_trained:
+        logging.warning("Final evaluation is being run on a model that was not locally fine-tuned.")
+
+    acc = evaluate(best_model, test_df, num_workers=training_config["num_workers"])
+    print(f"\n=========================================")
+    print(f"Final Accuracy on test set: {acc:.4f}")
+    print(f"=========================================\n")
 
 if __name__ == "__main__":
     main()

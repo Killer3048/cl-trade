@@ -1,211 +1,277 @@
 import os
 import logging
-from typing import Dict, List
-from gluonts.dataset.common import ListDataset
-from gluonts.dataset.field_names import FieldName
+import time
+from typing import Dict, List, Any
+
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from momentfm import MOMENTPipeline
+from torch.amp import autocast, GradScaler
+from safetensors.torch import load_file
 
 logger = logging.getLogger(__name__)
 
 class MomentClassifier:
     def __init__(self, config: dict):
-        self.seq_len = config.get("seq_len", 64)
-        self.pred_len = config.get("pred_len", config.get("prediction_length", 1))
+        self.seq_len = config.get("seq_len", 512)
+        self.pred_len = config.get("prediction_length", 1)
         self.model_name = config.get("model_name", "AutonLab/MOMENT-1-large")
         self.results_output_dir = config.get("results_output_dir", "moment_model")
-        self.retrain_interval = 1 if config.get("all_time_retrain", False) else 0
         self.epochs = config.get("epochs", 100)
         self.batch_size = config.get("batch_size", 32)
         self.num_batches_per_epoch = config.get("num_batches_per_epoch", 50)
         self.early_stopping = config.get("early_stopping", 20)
         self.lr = config.get("lr", 1e-4)
-        self._steps_since_train = 0
-        self.moment: MOMENTPipeline | None = None
+        self.compile_model = config.get("compile_model", True)
+        self.save_on_improve = config.get("save_on_improve", False)
+        self.all_time_retrain = config.get("all_time_retrain", False)
+        
+        self.moment: torch.nn.Module | None = None
         self.is_trained = False
         self.trained_epochs: int = 0
-        self.batches_per_epoch: list[int] = []
+        
+        logger.info(f"MomentClassifier initialized. Seq Len: {self.seq_len}, Pred Len: {self.pred_len}, Full Retrain: {self.all_time_retrain}")
 
     def load_model(self):
+        logger.info("Starting model loading process...")
+        start_time = time.time()
         os.makedirs(self.results_output_dir, exist_ok=True)
-        model_path = (
-            self.results_output_dir
-            if os.path.isfile(os.path.join(self.results_output_dir, "config.json"))
-            else self.model_name
-        )
-        self.moment = MOMENTPipeline.from_pretrained(
-            model_path,
-            model_kwargs={"task_name": "classification", "n_channels": 5, "num_class": 2},
-        )
-        self.moment.init()
-        self.is_trained = os.path.isfile(os.path.join(self.results_output_dir, "config.json"))
+        
+        model_kwargs = {"task_name": "classification", "n_channels": 5, "num_class": 2}
+        
+        try:
+            # --- НОВАЯ, НАДЕЖНАЯ ЛОГИКА ---
+            # Шаг 1: Всегда создаем "каркас" модели с правильной архитектурой.
+            # Это гарантирует, что у нас всегда есть правильные размеры слоев.
+            logger.info(f"Step 1: Creating model skeleton from '{self.model_name}' with custom classification head.")
+            pipeline = MOMENTPipeline.from_pretrained(self.model_name, model_kwargs=model_kwargs)
+            pipeline.init()
+            self.moment = pipeline
+
+            # Шаг 2: Ищем локальные веса и загружаем их, если all_time_retrain=False
+            local_weights_path = os.path.join(self.results_output_dir, "model.safetensors")
+            
+            if self.all_time_retrain:
+                logger.info("Step 2: Full retrain mode is ON. Skipping loading of local weights.")
+                self.is_trained = False
+            elif os.path.exists(local_weights_path):
+                logger.info(f"Step 2: Found local weights at '{local_weights_path}'. Loading them into the model.")
+                state_dict = load_file(local_weights_path, device="cpu")
+                self.moment.load_state_dict(state_dict)
+                self.is_trained = True
+                logger.info("Successfully loaded local weights.")
+            else:
+                logger.warning(f"Step 2: No local weights found at '{local_weights_path}'. Using base model weights.")
+                self.is_trained = False
+
+            # Шаг 3: Компилируем модель, если это необходимо
+            if self.compile_model and torch.cuda.is_available():
+                logger.info("Step 3: Compiling the model for faster performance...")
+                self.moment = torch.compile(self.moment, mode="reduce-overhead")
+
+        except Exception as e:
+            logger.error(f"FATAL: Failed during model loading or initialization.", exc_info=True)
+            raise RuntimeError(f"Model could not be initialized or loaded.") from e
+
+        logger.info(f"Model ready in {time.time() - start_time:.2f}s. Is considered trained: {self.is_trained}")
 
     def save_model(self):
         if self.moment is not None:
-            self.moment.save_pretrained(self.results_output_dir)
+            logger.info(f"Saving model to {self.results_output_dir}...")
+            start_time = time.time()
+            
+            model_to_save = self.moment._orig_mod if hasattr(self.moment, '_orig_mod') else self.moment
+            
+            if isinstance(model_to_save, MOMENTPipeline):
+                 model_to_save.save_pretrained(self.results_output_dir)
+            else:
+                 logger.error(f"Cannot save model. Expected MOMENTPipeline, but got {type(model_to_save)}.")
+            
+            logger.info(f"Model saved in {time.time() - start_time:.2f} seconds.")
 
+    def _build_sequences(self, df: pd.DataFrame, purpose: str) -> tuple[np.ndarray, np.ndarray, list]:
+        if df.empty:
+            logger.warning(f"Input DataFrame for _build_sequences (purpose: {purpose}) is empty! Cannot generate sequences.")
+            return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
 
-    def _build_sequences(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        logger.info(f"Building sequences for '{purpose}'. Input df shape: {df.shape}, Unique items: {df['item_id'].nunique()}.")
+        start_time = time.time()
+        
         df = df.sort_values(["item_id", "timestamp"])
-        freq = pd.infer_freq(df["timestamp"])
-        if freq is None:
-            freq = "1min"
-        dataset = ListDataset(
-            [
-                {
-                    FieldName.START: group["timestamp"].iloc[0],
-                    FieldName.TARGET: group["close"].to_numpy(float),
-                    FieldName.FEAT_DYNAMIC_REAL: [
-                        group["open"].to_numpy(float),
-                        group["high"].to_numpy(float),
-                        group["low"].to_numpy(float),
-                        group["close"].to_numpy(float),
-                        group["volume"].to_numpy(float),
-                    ],
-                }
-                for _, group in df.groupby("item_id")
-            ],
-            freq=freq,
-        )
+        X_list, y_list, item_ids = [], [], []
+        required_len = self.seq_len + self.pred_len
+        logger.info(f"Required data length per item: {required_len} (seq_len={self.seq_len} + pred_len={self.pred_len})")
 
-        X_list: List[np.ndarray] = []
-        y_list: List[int] = []
-        for entry in dataset:
-            closes = np.array(entry[FieldName.TARGET], dtype=float)
-            feats = np.array(entry[FieldName.FEAT_DYNAMIC_REAL], dtype=float)
-            for i in range(len(closes) - self.seq_len - self.pred_len + 1):
-                seq = feats[:, i : i + self.seq_len]
-                future_idx = i + self.seq_len + self.pred_len - 1
-                past_idx = i + self.seq_len - 1
-                target = 1 if closes[future_idx] > closes[past_idx] else 0
+        for item_id, group in df.groupby("item_id"):
+            group_len = len(group)
+            if group_len < required_len:
+                logger.warning(f"Skipping '{item_id}': not enough data. Have {group_len}, need {required_len}.")
+                continue
+            
+            closes = group["close"].to_numpy(dtype=np.float32)
+            feats = group[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float32).T
+            
+            if purpose == "training":
+                for i in range(len(closes) - required_len + 1):
+                    X_list.append(feats[:, i : i + self.seq_len])
+                    y_list.append(1 if closes[i + required_len - 1] > closes[i + self.seq_len - 1] else 0)
+            else:
+                seq = feats[:, -required_len:-self.pred_len]
+                target = 1 if closes[-1] > closes[-self.pred_len - 1] else 0
                 X_list.append(seq)
                 y_list.append(target)
+                item_ids.append(item_id)
+        
         if not X_list:
-            return np.empty((0, 5, self.seq_len), float), np.empty((0,), int)
-        return np.stack(X_list), np.array(y_list)
+            logger.warning(f"No sequences were generated for purpose '{purpose}' from the provided data.")
+            return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
+        
+        X, y = np.stack(X_list), np.array(y_list, dtype=np.int64)
+        logger.info(f"Successfully generated {len(y)} sequences for '{purpose}' in {time.time() - start_time:.2f}s. Final shape of X: {X.shape}")
+        return X, y, item_ids
 
-    def _embed(self, x: np.ndarray) -> np.ndarray:
+    def fit(self, df: pd.DataFrame, val_df: pd.DataFrame | None = None, num_workers: int = 0):
+        logger.info("Starting model fitting process...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.moment.to(device)
-        self.moment.eval()
-        with torch.no_grad():
-            tensor_x = torch.tensor(x, dtype=torch.float32).to(device)
-            mask = torch.ones(tensor_x.shape[0], self.seq_len, dtype=torch.long).to(device)
-            out = self.moment.embed(x_enc=tensor_x, input_mask=mask)
-            emb = out.embeddings.detach().cpu().numpy()
-        return emb
-
-    def fit(self, df: pd.DataFrame, val_df: pd.DataFrame | None = None):
-        X, y = self._build_sequences(df)
+        
+        X, y, _ = self._build_sequences(df, "training")
         if X.size == 0:
-            logger.warning("No training data available")
+            logger.error("No training data could be generated. Aborting fit.")
             return
+
+        logger.info(f"Training data prepared: {X.shape[0]} samples.")
+
+        X_val, y_val = None, None
         if val_df is not None:
-            X_val, y_val = self._build_sequences(val_df)
-        else:
-            X_val, y_val = None, None
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        dataset = TensorDataset(
-            torch.tensor(X, dtype=torch.float32),
-            torch.tensor(y, dtype=torch.long),
-        )
-        if X_val is not None:
-            val_dataset = TensorDataset(
-                torch.tensor(X_val, dtype=torch.float32),
-                torch.tensor(y_val, dtype=torch.long),
-            )
-            val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
-        else:
-            val_loader = None
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+            X_val, y_val, _ = self._build_sequences(val_df, "validation")
+            if X_val.size > 0:
+                logger.info(f"Validation data prepared: {X_val.shape[0]} samples.")
+            else:
+                logger.warning("Validation data was provided, but no validation sequences could be generated.")
+        
+        dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+        
+        val_loader = None
+        if X_val is not None and y_val is not None and X_val.size > 0:
+            val_dataset = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
+            val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+        
         self.moment.to(device)
-        self.moment.train()
-        criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.moment.parameters(), lr=self.lr)
-        best_val = float("-inf")
+        criterion = torch.nn.CrossEntropyLoss()
+        scaler = GradScaler(device_type=device, enabled=(device == 'cuda'))
+        
+        best_val_acc = 0.0
         patience = 0
-        self.trained_epochs = 0
-        self.batches_per_epoch = []
+        best_model_state_dict: Dict[str, Any] | None = None
+        
+        data_iterator = iter(dataloader)
+
         for epoch in range(self.epochs):
-            total_correct = 0
-            total_samples = 0
-            steps = 0
-            for step, (batch_x, batch_y) in enumerate(dataloader):
-                batch_x = batch_x.to(device)
-                batch_y = batch_y.to(device)
-                mask = torch.ones(batch_x.shape[0], self.seq_len, dtype=torch.long).to(device)
-                out = self.moment(x_enc=batch_x, input_mask=mask)
-                loss = criterion(out.logits, batch_y)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                pred = out.logits.argmax(dim=1)
-                total_correct += (pred == batch_y).sum().item()
+            self.moment.train()
+            epoch_start_time = time.time()
+            total_correct, total_samples = 0, 0
+            logger.info(f"--- Starting Epoch {epoch + 1}/{self.epochs} (Patience: {patience}/{self.early_stopping}) ---")
+            
+            for _ in range(self.num_batches_per_epoch):
+                try: batch_x, batch_y = next(data_iterator)
+                except StopIteration:
+                    data_iterator = iter(dataloader)
+                    batch_x, batch_y = next(data_iterator)
+
+                batch_x, batch_y = batch_x.to(device, non_blocking=True), batch_y.to(device, non_blocking=True)
+                mask = torch.ones(batch_x.shape[0], self.seq_len, dtype=torch.long, device=device)
+                optimizer.zero_grad(set_to_none=True)
+                
+                with autocast(device_type=device, dtype=torch.float16, enabled=(device == 'cuda')):
+                    out = self.moment(x_enc=batch_x, input_mask=mask)
+                    loss = criterion(out.logits, batch_y)
+                
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                
+                total_correct += (out.logits.argmax(dim=1) == batch_y).sum().item()
                 total_samples += batch_y.size(0)
-                steps += 1
-                if step + 1 >= self.num_batches_per_epoch:
-                    break
-            train_acc = total_correct / max(total_samples, 1)
-            self.batches_per_epoch.append(steps)
-            logger.info("Epoch %d train accuracy: %.4f", epoch + 1, train_acc)
-            if val_loader is not None:
-                self.moment.eval()
-                total_correct = 0
-                total_samples = 0
-                with torch.no_grad():
-                    for val_x, val_y in val_loader:
-                        val_x = val_x.to(device)
-                        val_y = val_y.to(device)
-                        mask = torch.ones(val_x.shape[0], self.seq_len, dtype=torch.long).to(device)
-                        logits = self.moment(x_enc=val_x, input_mask=mask).logits
-                        total_correct += (logits.argmax(dim=1) == val_y).sum().item()
-                        total_samples += val_y.size(0)
-                val_acc = total_correct / max(total_samples, 1)
-                logger.info("Epoch %d validation accuracy: %.4f", epoch + 1, val_acc)
-                if val_acc > best_val:
-                    best_val = val_acc
+            
+            logger.info(f"Epoch {epoch+1} took {time.time()-epoch_start_time:.2f}s. Train Acc: {total_correct/max(1,total_samples):.4f}")
+
+            if val_loader:
+                val_acc = self.evaluate_on_loader(val_loader, device, "Validation")
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
                     patience = 0
+                    logger.info(f"New best validation accuracy: {best_val_acc:.4f}.")
+                    
+                    current_model_state = (self.moment._orig_mod if hasattr(self.moment, '_orig_mod') else self.moment).state_dict()
+                    best_model_state_dict = {k: v.cpu() for k, v in current_model_state.items()}
+                    
+                    if self.save_on_improve:
+                        self.save_model()
                 else:
                     patience += 1
                     if patience >= self.early_stopping:
-                        self.trained_epochs = epoch + 1
-                        logger.info("Early stopping")
+                        logger.info(f"Early stopping triggered after {epoch + 1} epochs.")
                         break
-                self.moment.train()
             self.trained_epochs = epoch + 1
-        self.save_model()
-        self._steps_since_train = 0
-        self.is_trained = True
-        logger.info("Model trained on %d samples", len(y))
+        
+        logger.info("Training finished.")
+        if not self.save_on_improve and best_model_state_dict is not None:
+            logger.info(f"Loading best model state (acc: {best_val_acc:.4f}) and saving to disk...")
+            final_model = self.moment._orig_mod if hasattr(self.moment, '_orig_mod') else self.moment
+            final_model.load_state_dict(best_model_state_dict)
+            self.save_model()
+            self.is_trained = True
+
+    def evaluate_on_loader(self, loader: DataLoader, device: str, purpose: str = "Evaluation") -> float:
+        self.moment.eval()
+        total_correct, total_samples = 0, 0
+        start_time = time.time()
+        with torch.no_grad():
+            for x, y in loader:
+                x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+                mask = torch.ones(x.shape[0], self.seq_len, dtype=torch.long, device=device)
+                with autocast(device_type=device, dtype=torch.float16, enabled=(device == 'cuda')):
+                    logits = self.moment(x_enc=x, input_mask=mask).logits
+                total_correct += (logits.argmax(dim=1) == y).sum().item()
+                total_samples += y.size(0)
+        
+        val_acc = total_correct / max(1, total_samples)
+        logger.info(f"{purpose} on {total_samples} samples took {time.time()-start_time:.2f}s. Accuracy: {val_acc:.4f}")
+        return val_acc
 
     def predict(self, df: pd.DataFrame) -> Dict[str, str]:
+        logger.info(f"Starting prediction for {df['item_id'].nunique()} items...")
         result = {sid: "NEUTRAL" for sid in df["item_id"].unique()}
-        if not self.is_trained:
-            logger.warning("Model not trained")
-            return result
-        seqs = {}
-        for item_id, group in df.groupby("item_id"):
-            if len(group) < self.seq_len:
-                continue
-            seq = group[["open", "high", "low", "close", "volume"]].tail(self.seq_len).to_numpy(float).T
-            seqs[item_id] = seq
-        if not seqs:
-            return result
-        X = np.stack(list(seqs.values()))
+
+        if self.moment is None: return result
+        
+        X, _, item_ids = self._build_sequences(df, purpose="prediction")
+        if X.size == 0: return result
+        
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.moment.to(device)
         self.moment.eval()
-        tensor_x = torch.tensor(X, dtype=torch.float32).to(device)
-        mask = torch.ones(tensor_x.shape[0], self.seq_len, dtype=torch.long).to(device)
+        
+        tensor_x = torch.from_numpy(X)
+        predict_dataset = TensorDataset(tensor_x)
+        predict_loader = DataLoader(predict_dataset, batch_size=self.batch_size * 2)
+
+        all_preds = []
         with torch.no_grad():
-            logits = self.moment(x_enc=tensor_x, input_mask=mask).logits
-            preds = logits.argmax(dim=1).cpu().numpy()
-        for item_id, pred in zip(seqs.keys(), preds):
+            for (batch_x,) in predict_loader:
+                batch_x = batch_x.to(device)
+                mask = torch.ones(batch_x.shape[0], self.seq_len, dtype=torch.long, device=device)
+                with autocast(device_type=device, dtype=torch.float16, enabled=(device=='cuda')):
+                    logits = self.moment(x_enc=batch_x, input_mask=mask).logits
+                    preds = logits.argmax(dim=1).cpu().numpy()
+                    all_preds.extend(preds)
+            
+        for item_id, pred in zip(item_ids, all_preds):
             result[item_id] = "AGREE_LONG" if pred == 1 else "AGREE_SHORT"
-        self._steps_since_train += 1
-        if self.retrain_interval and self._steps_since_train >= self.retrain_interval:
-            self.fit(df)
+        
+        logger.info("Prediction finished.")
         return result
