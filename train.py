@@ -10,7 +10,6 @@ from directional_metrics import DirectionalAccuracy
 # from directional_loss import LastStepDirectionalQuantileOutput
 from custom.timesfm_model import TimesFMModel
 from custom.tirex_model import TiRexModel
-from custom.ttm_model import TTMModel
 from custom.preprocessing import (
     add_time_features,
     add_indicators,
