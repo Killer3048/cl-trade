@@ -5,6 +5,7 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from moment_classifier import MomentClassifier
+from train import split_by_item, evaluate
 
 
 def create_dummy_df(seq_len=16, steps=40, item="BTCUSDT"):
@@ -24,7 +25,12 @@ def create_dummy_df(seq_len=16, steps=40, item="BTCUSDT"):
 
 
 def test_train_and_predict(tmp_path):
-    config = {"seq_len": 16, "results_output_dir": tmp_path, "all_time_retrain": False}
+    config = {
+        "seq_len": 16,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": False,
+        "model_name": "AutonLab/MOMENT-1-small",
+    }
     model = MomentClassifier(config)
     model.load_model()
     df = create_dummy_df()
@@ -34,7 +40,12 @@ def test_train_and_predict(tmp_path):
 
 
 def test_predict_without_training(tmp_path):
-    config = {"seq_len": 8, "results_output_dir": tmp_path, "all_time_retrain": False}
+    config = {
+        "seq_len": 8,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": False,
+        "model_name": "AutonLab/MOMENT-1-small",
+    }
     model = MomentClassifier(config)
     model.load_model()
     df = create_dummy_df(seq_len=8, steps=20)
@@ -43,7 +54,12 @@ def test_predict_without_training(tmp_path):
 
 
 def test_auto_retrain(tmp_path):
-    config = {"seq_len": 8, "results_output_dir": tmp_path, "all_time_retrain": True}
+    config = {
+        "seq_len": 8,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": True,
+        "model_name": "AutonLab/MOMENT-1-small",
+    }
     model = MomentClassifier(config)
     model.load_model()
     df = create_dummy_df(seq_len=8, steps=32)
@@ -55,10 +71,31 @@ def test_auto_retrain(tmp_path):
 
 
 def test_predict_small_dataset(tmp_path):
-    config = {"seq_len": 16, "results_output_dir": tmp_path, "all_time_retrain": False}
+    config = {
+        "seq_len": 16,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": False,
+        "model_name": "AutonLab/MOMENT-1-small",
+    }
     model = MomentClassifier(config)
     model.load_model()
     df = create_dummy_df(seq_len=16, steps=10)
     model.fit(df)
     signals = model.predict(df)
     assert signals["BTCUSDT"] == "NEUTRAL"
+
+
+def test_split_and_evaluate(tmp_path):
+    df = create_dummy_df(seq_len=16, steps=40)
+    train_df, test_df = split_by_item(df, test_ratio=0.25)
+    config = {
+        "seq_len": 16,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": False,
+        "model_name": "AutonLab/MOMENT-1-small",
+    }
+    model = MomentClassifier(config)
+    model.load_model()
+    model.fit(train_df)
+    acc = evaluate(model, test_df)
+    assert 0.0 <= acc <= 1.0
