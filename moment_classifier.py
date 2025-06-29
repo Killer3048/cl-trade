@@ -15,8 +15,6 @@ class MomentClassifier:
         self.seq_len = config.get("seq_len", 64)
         self.model_name = config.get("model_name", "AutonLab/MOMENT-1-large")
         self.results_output_dir = config.get("results_output_dir", "moment_model")
-        # If all_time_retrain flag is True we retrain on every prediction step.
-        # Otherwise the classifier will not be automatically retrained.
         self.retrain_interval = 1 if config.get("all_time_retrain", False) else 0
         self._steps_since_train = 0
         self.moment: MOMENTPipeline | None = None
@@ -40,7 +38,7 @@ class MomentClassifier:
             joblib.dump(self.classifier, clf_path)
 
     def _build_sequences(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-        df = df.sort_values(["item_id", "timestamp"])  # ensure ordering
+        df = df.sort_values(["item_id", "timestamp"])
         X_list: List[np.ndarray] = []
         y_list: List[int] = []
         for item_id, group in df.groupby("item_id"):
@@ -48,7 +46,7 @@ class MomentClassifier:
             closes = group["close"].to_numpy(float)
             vals = group[["open", "high", "low", "close", "volume"]].to_numpy(float)
             for i in range(len(group) - self.seq_len - 1):
-                seq = vals[i : i + self.seq_len].T  # shape (5, seq_len)
+                seq = vals[i : i + self.seq_len].T
                 target = 1 if closes[i + self.seq_len] > closes[i + self.seq_len - 1] else 0
                 X_list.append(seq)
                 y_list.append(target)
