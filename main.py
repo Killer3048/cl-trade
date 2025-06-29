@@ -43,12 +43,9 @@ TIMEFRAME_CONFIG = CONFIG.get("timeframe_config", {
     "LONG_TF": {
         "use": True,
         "interval": "1h",
-        "freq": "1h",
         "candles_to_trade": 1,
         "prediction_length": 4,
         "results_output_dir": "1h_4pred",
-        "confidence_threshold": 0.50,
-        "use_ensemble": True,
     }
 })
 RECALCULATION_AFTER_REPEATED_SIGNAL = CONFIG.get(
@@ -108,6 +105,7 @@ def init_models_once():
             "seq_len": long_config.get("seq_len", 64),
             "results_output_dir": long_config.get("results_output_dir", "moment_model"),
             "model_name": long_config.get("model_name", "AutonLab/MOMENT-1-large"),
+            "prediction_length": long_config.get("prediction_length", 1),
             "all_time_retrain": ALL_TIME_RETRAIN,
         }
         model_long_tf = MomentClassifier(config_long_tf)

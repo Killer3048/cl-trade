@@ -12,18 +12,9 @@
     "LONG_TF": {
       "use": true,
       "interval": "1h",
-      "freq": "1h",
       "candles_to_trade": 1,
       "prediction_length": 1,
-      "mode": "target",
-      "results_output_dir": "1h_4pred",
-      "confidence_threshold": 0.55,
-      "use_ensemble": true,
-      "known_covariates": [],
-      "use_kernel_filter": true,
-      "kernel_lookback": 8,
-      "kernel_r": 8.0,
-      "kernel_start_at": 25
+      "results_output_dir": "1h_4pred"
     }
   },
   "all_time_retrain": true,
