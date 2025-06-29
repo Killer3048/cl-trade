@@ -35,6 +35,7 @@ class MomentClassifier:
         logger.info(f"MomentClassifier initialized. Seq Len: {self.seq_len}, Pred Len: {self.pred_len}, Full Retrain: {self.all_time_retrain}")
 
     def load_model(self):
+        """Load MOMENT model weights and prepare the pipeline."""
         logger.info("Starting model loading process...")
         start_time = time.time()
         os.makedirs(self.results_output_dir, exist_ok=True)
@@ -73,6 +74,7 @@ class MomentClassifier:
         logger.info(f"Model ready in {time.time() - start_time:.2f}s. Is considered trained: {self.is_trained}")
 
     def save_model(self):
+        """Persist the current model to ``results_output_dir``."""
         if self.moment is not None:
             logger.info(f"Saving model to {self.results_output_dir}...")
             start_time = time.time()
@@ -87,6 +89,7 @@ class MomentClassifier:
             logger.info(f"Model saved in {time.time() - start_time:.2f} seconds.")
 
     def _build_sequences(self, df: pd.DataFrame, purpose: str = "training") -> tuple[np.ndarray, np.ndarray, list]:
+        """Convert a DataFrame into model input sequences."""
         if df.empty:
             logger.warning(f"Input DataFrame for _build_sequences (purpose: {purpose}) is empty! Cannot generate sequences.")
             return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
@@ -144,6 +147,7 @@ class MomentClassifier:
         return X, y, item_ids
 
     def fit(self, df: pd.DataFrame, val_df: pd.DataFrame | None = None, num_workers: int = 0):
+        """Train the classifier on provided data."""
         logger.info("Starting model fitting process...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
@@ -238,6 +242,7 @@ class MomentClassifier:
             self.is_trained = True
 
     def evaluate_on_loader(self, loader: DataLoader, device: str, purpose: str = "Evaluation") -> float:
+        """Evaluate the model on a dataloader and return accuracy."""
         self.moment.eval()
         total_correct, total_samples = 0, 0
         start_time = time.time()
@@ -255,6 +260,7 @@ class MomentClassifier:
         return val_acc
 
     def predict(self, df: pd.DataFrame) -> Dict[str, str]:
+        """Predict signals for a dataframe of market data."""
         logger.info(f"Starting prediction for {df['item_id'].nunique()} items...")
         result = {sid: "NEUTRAL" for sid in df["item_id"].unique()}
 

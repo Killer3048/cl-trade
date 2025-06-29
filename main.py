@@ -64,7 +64,7 @@ LEVERAGE_CONFIG = CONFIG.get("leverage", {"default": 30})
 
 if not TIMEFRAME_CONFIG.get("LONG_TF", {}).get("use", True):
     logging.critical(
-        "Модель LONG_TF отключена. Бот не может работать без активной модели."
+        "LONG_TF model is disabled. The bot cannot operate without it."
     )
     sys.exit(1)
 
@@ -92,6 +92,7 @@ GLOBAL_SIGNALS_UPDATE_EVENT = asyncio.Event()
 ALL_BOTS = []
 
 def init_models_once():
+    """Initialize PredictionManager and load the LONG_TF model once."""
     global PREDICTION_MANAGER
 
     long_config = TIMEFRAME_CONFIG["LONG_TF"]
@@ -111,15 +112,15 @@ def init_models_once():
             raise RuntimeError("PredictionManager failed to initialize")
 
         PREDICTION_MANAGER = manager
-        logging.info("LONG_TF модель успешно загружена.")
+        logging.info("LONG_TF model loaded successfully.")
         return True
 
     except Exception as e:
-        logging.exception(f"Ошибка при инициализации модели LONG_TF: {e}")
+        logging.exception(f"Error initializing LONG_TF model: {e}")
         return False
 
 async def fetch_market_data_for_symbols(symbols, tf, total_candles=10500) -> pd.DataFrame:
-    """Загружает исторические данные для списка символов."""
+    """Load historical candles for the provided symbols."""
     async def gather_fetches():
         tasks = [
             asyncio.to_thread(
@@ -136,7 +137,9 @@ async def fetch_market_data_for_symbols(symbols, tf, total_candles=10500) -> pd.
     for i, sym in enumerate(symbols):
         result = results[i]
         if isinstance(result, Exception):
-            logging.error(f"Ошибка при загрузке данных symbol={sym}, tf={tf}: {result}")
+            logging.error(
+                f"Error loading data symbol={sym}, tf={tf}: {result}"
+            )
         elif isinstance(result, pd.DataFrame) and not result.empty:
             result["item_id"] = sym
             all_dfs.append(result)
@@ -147,13 +150,15 @@ async def fetch_market_data_for_symbols(symbols, tf, total_candles=10500) -> pd.
     df_big = pd.concat(all_dfs, ignore_index=True)
 
     if "timestamp" not in df_big.columns:
-        logging.error("В итоговом df нет колонки 'timestamp'. Возвращаем пустой.")
+        logging.error(
+            "Result dataframe lacks 'timestamp' column. Returning empty."
+        )
         return pd.DataFrame()
     
     return df_big
 
 async def get_signals_for_all_symbols(symbols):
-    """Получает сигналы от модели LONG_TF для всех символов."""
+    """Get LONG_TF model signals for all provided symbols."""
     global GLOBAL_SIGNALS_LONG_TF
     global GLOBAL_SIGNALS_VERSION
 
@@ -176,7 +181,9 @@ async def get_signals_for_all_symbols(symbols):
 
     GLOBAL_SIGNALS_VERSION += 1
     GLOBAL_SIGNALS_UPDATE_EVENT.set()
-    logging.info(f"SIGNALS: Новые сигналы LONG_TF получены, version={GLOBAL_SIGNALS_VERSION}")
+    logging.info(
+        f"SIGNALS: new LONG_TF signals received, version={GLOBAL_SIGNALS_VERSION}"
+    )
     signals_arr = ", ".join(f"{sym}: {sig}" for sym, sig in signals_long_tf.items())
     logging.info(f"SIGNALS_ARRAY: [{signals_arr}]")
 
@@ -205,38 +212,52 @@ class WebSocketManager:
         while attempt < max_retries and self.running:
             attempt += 1
             try:
-                logging.info(f"WebSocketManager: Подключение к {self.ws_url} для {self.symbol} ({self.interval_str}), попытка {attempt}/{max_retries}")
+                logging.info(
+                    f"WebSocketManager: Connecting to {self.ws_url} for {self.symbol} ({self.interval_str}), attempt {attempt}/{max_retries}"
+                )
                 async with websockets.connect(self.ws_url, open_timeout=20, close_timeout=10, ping_interval=20, ping_timeout=20) as websocket:
                     self.websocket = websocket
                     sub_msg = {"op": "subscribe", "args": [f"kline.{self.interval}.{self.symbol}"]}
                     await websocket.send(json.dumps(sub_msg))
-                    logging.info(f"WebSocketManager: Подписка на {self.symbol} ({self.interval_str}) выполнена")
+                    logging.info(
+                        f"WebSocketManager: Subscribed to {self.symbol} ({self.interval_str})"
+                    )
                     await self.process_messages(websocket)
 
             except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedError, websockets.exceptions.ConnectionClosedOK,  websockets.exceptions.InvalidURI, websockets.exceptions.InvalidHandshake, asyncio.TimeoutError) as e:
-                logging.warning(f"WebSocketManager: WebSocket ({self.symbol}, {self.interval_str}) закрыт или таймаут: {type(e).__name__} - {e}, попытка {attempt}/{max_retries}")
+                logging.warning(
+                    f"WebSocketManager: WebSocket ({self.symbol}, {self.interval_str}) closed or timed out: {type(e).__name__} - {e}, attempt {attempt}/{max_retries}"
+                )
                 if isinstance(e, websockets.exceptions.ConnectionClosedOK):
                      if not self.running: break
                 if attempt < max_retries and self.running:
                     await asyncio.sleep(min(retry_delay, 30))
                     retry_delay *= 1.1
                 elif self.running:
-                    logging.critical(f"WebSocketManager: Достигнуто максимальное количество попыток подключения для {self.symbol} ({self.interval_str})")
+                    logging.critical(
+                        f"WebSocketManager: Maximum connection attempts reached for {self.symbol} ({self.interval_str})"
+                    )
                     break
 
             except Exception as e:
-                logging.exception(f"WebSocketManager: Неизвестная ошибка WebSocket ({self.symbol}, {self.interval_str}): {e}")
+                logging.exception(
+                    f"WebSocketManager: Unknown WebSocket error ({self.symbol}, {self.interval_str}): {e}"
+                )
                 if attempt < max_retries and self.running:
                     await asyncio.sleep(min(retry_delay, 30))
                     retry_delay *= 1.1
                 elif self.running:
-                    logging.critical(f"WebSocketManager: Достигнуто максимальное количество попыток подключения (неизвестная ошибка) для {self.symbol} ({self.interval_str})")
+                    logging.critical(
+                        f"WebSocketManager: Maximum connection attempts reached (unknown error) for {self.symbol} ({self.interval_str})"
+                    )
                     break
 
             finally:
                  self.websocket = None
 
-        logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): Цикл подключения завершен.")
+        logging.info(
+            f"WebSocketManager ({self.symbol}, {self.interval_str}): Connection loop finished."
+        )
 
     async def process_messages(self, websocket):
 
@@ -247,7 +268,9 @@ class WebSocketManager:
                 data = json.loads(msg)
 
                 if data.get("op") == "subscribe" and data.get("success"):
-                    logging.info(f"WebSocketManager: Подписка подтверждена: {data.get('ret_msg')}")
+                    logging.info(
+                        f"WebSocketManager: Subscription confirmed: {data.get('ret_msg')}"
+                    )
                     continue
                 if data.get("op") == "ping":
                      await websocket.send(json.dumps({"op": "pong", "req_id": data.get("req_id")}))
@@ -265,7 +288,9 @@ class WebSocketManager:
                              if current_start_time != self.last_candle_open_time:
                                  self.last_candle_open_time = current_start_time
                                  self.confirmed_candles_counter += 1
-                                 logging.info(f"WebSocketManager: Подтверждена свеча ({self.interval_str}) [{self.confirmed_candles_counter}/{self.candle_accumulation_threshold}], timestamp={current_start_time}")
+                                 logging.info(
+                                     f"WebSocketManager: Candle confirmed ({self.interval_str}) [{self.confirmed_candles_counter}/{self.candle_accumulation_threshold}], timestamp={current_start_time}"
+                                 )
                                  
                                  if self.confirmed_candles_counter >= self.candle_accumulation_threshold:
                                      self.confirmed_candles_counter = 0
@@ -279,16 +304,22 @@ class WebSocketManager:
                                          bot.signals_version = signals_version
                                          trade_tasks.append(asyncio.create_task(bot.trade()))
 
-                                     logging.info(f"WebSocketManager: Задачи торговли для {len(trade_tasks)} ботов запущены (version={signals_version}).")
+                                     logging.info(
+                                         f"WebSocketManager: Trade tasks for {len(trade_tasks)} bots started (version={signals_version})."
+                                     )
 
             except json.JSONDecodeError:
-                logging.debug(f"WebSocketManager: Ошибка декодирования JSON: {msg}")
+                logging.debug(
+                    f"WebSocketManager: JSON decode error: {msg}"
+                )
             except Exception as e:
-                logging.exception(f"WebSocketManager: Ошибка обработки сообщения: {e}")
+                logging.exception(
+                    f"WebSocketManager: Error processing message: {e}"
+                )
 
     def register_bot(self, bot):
         self.bots.append(bot)
-        logging.info(f"WebSocketManager: Зарегистрирован бот {bot.name}")
+        logging.info(f"WebSocketManager: Registered bot {bot.name}")
 
     def start(self):
         def run_manager():
@@ -297,7 +328,9 @@ class WebSocketManager:
             try:
                 self.loop.run_until_complete(self.connect())
             finally:
-                logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): Закрытие event loop.")
+                logging.info(
+                    f"WebSocketManager ({self.symbol}, {self.interval_str}): Closing event loop."
+                )
 
                 tasks = asyncio.all_tasks(loop=self.loop)
                 for task in tasks:
@@ -313,22 +346,34 @@ class WebSocketManager:
         return thread
 
     def stop(self):
-        logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): Запрос на остановку.")
+        logging.info(
+            f"WebSocketManager ({self.symbol}, {self.interval_str}): Stop requested."
+        )
         self.running = False
 
         if self.websocket and self.loop and self.loop.is_running():
-             logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): Отправка команды закрытия WebSocket.")
+             logging.info(
+                 f"WebSocketManager ({self.symbol}, {self.interval_str}): Sending WebSocket close command."
+             )
              future = asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
              try:
-                  future.result(timeout=5)
-                  logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): WebSocket успешно закрыт.")
+                 future.result(timeout=5)
+                  logging.info(
+                      f"WebSocketManager ({self.symbol}, {self.interval_str}): WebSocket closed successfully."
+                  )
              except asyncio.TimeoutError:
-                  logging.warning(f"WebSocketManager ({self.symbol}, {self.interval_str}): Таймаут при закрытии WebSocket.")
+                  logging.warning(
+                      f"WebSocketManager ({self.symbol}, {self.interval_str}): Timeout while closing WebSocket."
+                  )
              except Exception as e:
-                  logging.error(f"WebSocketManager ({self.symbol}, {self.interval_str}): Ошибка при закрытии WebSocket: {e}")
+                  logging.error(
+                      f"WebSocketManager ({self.symbol}, {self.interval_str}): Error closing WebSocket: {e}"
+                  )
         elif self.loop and self.loop.is_running():
              self.loop.call_soon_threadsafe(self.loop.stop)
-             logging.info(f"WebSocketManager ({self.symbol}, {self.interval_str}): Отправлена команда остановки event loop.")
+             logging.info(
+                 f"WebSocketManager ({self.symbol}, {self.interval_str}): Event loop stop command sent."
+             )
 
 class ModelBasedBot(Thread):
     def __init__(self, api_key, api_secret, base_url, symbol, leverage=30, news_check_enabled=True):
@@ -345,9 +390,11 @@ class ModelBasedBot(Thread):
         try:
             self.equity = asyncio.run(asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret))
             self.starting_balance = self.equity
-            logging.info(f"{self.name}: Инициализирован с балансом: {self.equity}")
+            logging.info(f"{self.name}: Initialized with balance: {self.equity}")
         except Exception as e:
-            logging.critical(f"{self.name}: Не удалось получить баланс при инициализации: {e}")
+            logging.critical(
+                f"{self.name}: Failed to fetch balance during initialization: {e}"
+            )
             self.equity = 0.0
             self.starting_balance = 0.0
 
@@ -395,42 +442,52 @@ class ModelBasedBot(Thread):
                 set_leverage, self.base_url, self.api_key, self.api_secret, self.symbol, self.leverage
             )
             if lev_result.get('retCode') != 0:
-                logging.warning(f"{self.name}: Не удалось установить плечо {self.leverage}: {lev_result.get('retMsg')}")
+                logging.warning(
+                    f"{self.name}: Failed to set leverage {self.leverage}: {lev_result.get('retMsg')}"
+                )
 
             margin_result = await asyncio.to_thread(
                 switch_to_cross_margin, self.base_url, self.api_key, self.api_secret, self.symbol
             )
             if margin_result.get('retCode') != 0:
                  if "position mode is not modified" not in margin_result.get('retMsg', '').lower():
-                      logging.warning(f"{self.name}: Не удалось переключить на кросс-маржу: {margin_result.get('retMsg')}")
+                      logging.warning(
+                          f"{self.name}: Failed to switch to cross margin: {margin_result.get('retMsg')}"
+                      )
 
-            logging.info(f"{self.name}: Начальная настройка завершена.")
+            logging.info(f"{self.name}: Initial setup completed.")
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка во время initial_setup: {e}")
+            logging.exception(f"{self.name}: Error during initial_setup: {e}")
 
     async def initial_news_fetch(self):
-        """Получает новости при старте, чтобы установить last_news_timestamp."""
+        """Fetch news on startup to initialize ``last_news_timestamp``."""
         if not self.news_check_enabled or self.news_fetched:
             return
         try:
-            logging.debug(f"{self.name}: Выполняется начальная загрузка новостей...")
+            logging.debug(f"{self.name}: Performing initial news fetch...")
             news_articles = await self.get_news(initial=True)
             if news_articles:
                 valid_timestamps = [a['PUBLISHED_ON'] for a in news_articles if 'PUBLISHED_ON' in a and isinstance(a['PUBLISHED_ON'], int)]
                 if valid_timestamps:
                     self.last_news_timestamp = max(valid_timestamps)
-                    logging.info(f"{self.name}: Начальная загрузка новостей завершена. last_news_timestamp={self.last_news_timestamp}")
+                    logging.info(
+                        f"{self.name}: Initial news fetch completed. last_news_timestamp={self.last_news_timestamp}"
+                    )
                 else:
-                     logging.info(f"{self.name}: В начальных новостях нет валидных временных меток.")
+                     logging.info(
+                         f"{self.name}: No valid timestamps found in initial news."
+                     )
             else:
-                logging.info(f"{self.name}: Начальных новостей не найдено.")
+                logging.info(f"{self.name}: No initial news found.")
             self.news_fetched = True
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при начальной загрузке новостей: {e}")
+            logging.exception(
+                f"{self.name}: Error during initial news fetch: {e}"
+            )
 
     async def get_news(self, initial=False):
-        """Получает и фильтрует новости с CryptoCompare."""
+        """Fetch and filter news from CryptoCompare."""
         if not self.news_check_enabled:
             return []
 
@@ -445,7 +502,9 @@ class ModelBasedBot(Thread):
             data = response.json()
 
             if 'Err' in data and data['Err']:
-                logging.warning(f"{self.name}: Ошибка API CryptoCompare: {data['Err']}")
+                logging.warning(
+                    f"{self.name}: CryptoCompare API error: {data['Err']}"
+                )
                 return []
 
             articles = data.get('Data', [])
@@ -467,19 +526,25 @@ class ModelBasedBot(Thread):
                 latest_ts_in_batch = max(a['PUBLISHED_ON'] for a in new_articles)
                 if latest_ts_in_batch > current_max_ts:
                      self.last_news_timestamp = latest_ts_in_batch
-                     logging.debug(f"{self.name}: Обновлен last_news_timestamp={self.last_news_timestamp}")
+                     logging.debug(
+                         f"{self.name}: Updated last_news_timestamp={self.last_news_timestamp}"
+                     )
 
             return new_articles
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"{self.name}: Ошибка сети при получении новостей: {e}")
+            logging.error(
+                f"{self.name}: Network error while fetching news: {e}"
+            )
             return []
         except Exception as e:
-            logging.exception(f"{self.name}: Неизвестная ошибка при получении новостей: {e}")
+            logging.exception(
+                f"{self.name}: Unknown error while fetching news: {e}"
+            )
             return []
 
     def analyze_sentiment(self, articles):
-        """Анализирует сентимент новостей с учетом времени."""
+        """Analyze news sentiment with exponential time decay."""
         if not articles:
             return 'NEUTRAL'
 
@@ -522,33 +587,41 @@ class ModelBasedBot(Thread):
             return dominant_sentiment
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при анализе сентимента: {e}")
+            logging.exception(
+                f"{self.name}: Error analyzing sentiment: {e}"
+            )
             return 'NEUTRAL'
 
     async def check_drawdown(self):
-        """Проверяет текущую просадку, закрывает позицию при превышении порога и прекращает торговлю."""
+        """Check drawdown, close the position if threshold exceeded and stop trading."""
         try:
             self.equity = await asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret)
             current_drawdown = (self.starting_balance - self.equity) / self.starting_balance if self.starting_balance > 0 else 0
 
             if current_drawdown >= self.drawdown_alert_threshold:
                 if not self.drawdown_alert_triggered:
-                    logging.warning(f"{self.name}: Достигнут порог просадки ({current_drawdown:.2%})! Баланс: {self.equity:.2f}")
+                    logging.warning(
+                        f"{self.name}: Drawdown threshold reached ({current_drawdown:.2%})! Balance: {self.equity:.2f}"
+                    )
                     self.drawdown_alert_triggered = True
 
                     if self.position_type:
                         await self.close_position(reason="Max drawdown reached, terminating trading")
 
-                    logging.warning(f"{self.name}: Максимальная просадка достигнута. Рекомендуется прекратить торговлю!")
+                    logging.warning(
+                        f"{self.name}: Maximum drawdown reached. Trading is not recommended!"
+                    )
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при проверке просадки: {e}")
+            logging.exception(f"{self.name}: Error checking drawdown: {e}")
 
     def calculate_position_size(self, current_price):
-        """Рассчитывает размер позиции с учетом риска, плеча и ограничений биржи."""
+        """Calculate position size considering risk, leverage and exchange limits."""
         try:
             if self.equity <= 0 or current_price <= 0:
-                logging.warning(f"{self.name}: Невозможно рассчитать размер позиции (equity={self.equity}, price={current_price})")
+                logging.warning(
+                    f"{self.name}: Cannot calculate position size (equity={self.equity}, price={current_price})"
+                )
                 return 0.0
 
             risk_amount_usd = self.risk_factor * self.equity
@@ -559,10 +632,14 @@ class ModelBasedBot(Thread):
             max_order_qty = get_max_qty(self.base_url, self.symbol)
 
             if position_size_coin < min_order_qty:
-                 logging.warning(f"{self.name}: Расчетный размер ({position_size_coin:.8f}) меньше минимального ({min_order_qty}). Устанавливаем минимальный.")
+                 logging.warning(
+                     f"{self.name}: Calculated size ({position_size_coin:.8f}) below minimum ({min_order_qty}). Using minimum."
+                 )
                  position_size_coin = min_order_qty
             elif position_size_coin > max_order_qty:
-                 logging.warning(f"{self.name}: Расчетный размер ({position_size_coin:.8f}) больше максимального ({max_order_qty}). Устанавливаем максимальный.")
+                 logging.warning(
+                     f"{self.name}: Calculated size ({position_size_coin:.8f}) above maximum ({max_order_qty}). Using maximum."
+                 )
                  position_size_coin = max_order_qty
 
             step_size = min_order_qty
@@ -571,14 +648,20 @@ class ModelBasedBot(Thread):
             position_size_coin = round(position_size_coin, precision)
 
             if position_size_coin < min_order_qty:
-                 logging.warning(f"{self.name}: Размер позиции после округления ({position_size_coin:.8f}) меньше минимального. Возвращаем 0.")
+                 logging.warning(
+                     f"{self.name}: Position size after rounding ({position_size_coin:.8f}) below minimum. Returning 0."
+                 )
                  return 0.0
 
-            logging.info(f"{self.name}: Расчетный размер позиции: {position_size_coin:.8f} {self.symbol.replace('USDT', '')}")
+            logging.info(
+                f"{self.name}: Calculated position size: {position_size_coin:.8f} {self.symbol.replace('USDT', '')}"
+            )
             return position_size_coin
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при расчете размера позиции: {e}")
+            logging.exception(
+                f"{self.name}: Error calculating position size: {e}"
+            )
             return 0.0
 
     async def trade(self):
@@ -590,17 +673,21 @@ class ModelBasedBot(Thread):
             return
 
         self.current_signal_version = self.signals_version
-        logging.info(f"{self.name}: Начало обработки сигналов версии {self.current_signal_version}")
+        logging.info(
+            f"{self.name}: Starting processing of signals version {self.current_signal_version}"
+        )
 
         try:
             signal = GLOBAL_SIGNALS_LONG_TF.get(self.symbol, "NEUTRAL")
-            logging.info(f"{self.name}: Получен сигнал LONG_TF ({TIMEFRAME_CONFIG['LONG_TF']['interval']}) => {signal} (v{self.current_signal_version})")
+            logging.info(
+                f"{self.name}: Received LONG_TF signal ({TIMEFRAME_CONFIG['LONG_TF']['interval']}) => {signal} (v{self.current_signal_version})"
+            )
 
             sentiment = 'NEUTRAL'
             if self.news_check_enabled:
                 news_articles = await self.get_news()
                 sentiment = self.analyze_sentiment(news_articles)
-                logging.info(f"{self.name}: Сентимент новостей => {sentiment}")
+                logging.info(f"{self.name}: News sentiment => {sentiment}")
 
             position_data = await asyncio.to_thread(get_open_position, self.base_url, self.api_key, self.api_secret, self.symbol)
             current_position = None
@@ -613,10 +700,12 @@ class ModelBasedBot(Thread):
                 self.position_type = current_position['side'].lower()
                 self.position_size = float(current_position['size'])
                 entry_price = float(current_position.get('avgPrice') or current_position.get('entryPrice', 0))
-                logging.info(f"{self.name}: Активна позиция: {self.position_type.upper()} | Размер: {self.position_size} | Вход: {entry_price:.4f}")
+                logging.info(
+                    f"{self.name}: Active position: {self.position_type.upper()} | Size: {self.position_size} | Entry: {entry_price:.4f}"
+                )
             else:
                 if self.position_type:
-                    logging.info(f"{self.name}: Позиция больше не активна.")
+                    logging.info(f"{self.name}: Position no longer active.")
                 self.position_type = None
                 self.position_size = 0.0
 
@@ -624,12 +713,16 @@ class ModelBasedBot(Thread):
             df_price = await asyncio.to_thread(fetch_data_with_metrics, None, None, None, self.symbol, market_data_tf, 2, 2, 3, self.data_dir)
 
             if df_price.empty or 'close' not in df_price.columns:
-                logging.warning(f"{self.name}: Не удалось получить текущую цену ({market_data_tf}). Пропуск торговой логики.")
+                logging.warning(
+                    f"{self.name}: Failed to get current price ({market_data_tf}). Skipping trading logic."
+                )
                 return
 
             current_price = df_price['close'].iloc[-1]
             if current_price <= 0:
-                logging.warning(f"{self.name}: Получена невалидная цена ({current_price}). Пропуск торговой логики.")
+                logging.warning(
+                    f"{self.name}: Invalid price received ({current_price}). Skipping trading logic."
+                )
                 return
 
             action_taken = False
@@ -638,91 +731,125 @@ class ModelBasedBot(Thread):
                 self.equity = await asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret)
                 if signal == "AGREE_LONG":
                     if not self.news_check_enabled or sentiment == 'POSITIVE':
-                        logging.info(f"{self.name}: Сигнал AGREE_LONG и подходящий sentiment ({sentiment}). Попытка открыть LONG.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_LONG and suitable sentiment ({sentiment}). Attempting to open LONG."
+                        )
                         qty = self.calculate_position_size(current_price)
                         if qty > 0:
                             await self.open_position('Buy', qty, current_price)
                             action_taken = True
                     else:
-                        logging.info(f"{self.name}: Сигнал AGREE_LONG, но sentiment ({sentiment}) не позволяет открыть LONG.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_LONG but sentiment ({sentiment}) does not allow opening LONG."
+                        )
                 elif signal == "AGREE_SHORT":
                     if not self.news_check_enabled or sentiment == 'NEGATIVE':
-                        logging.info(f"{self.name}: Сигнал AGREE_SHORT и подходящий sentiment ({sentiment}). Попытка открыть SHORT.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_SHORT and suitable sentiment ({sentiment}). Attempting to open SHORT."
+                        )
                         qty = self.calculate_position_size(current_price)
                         if qty > 0:
                             await self.open_position('Sell', qty, current_price)
                             action_taken = True
                     else:
-                        logging.info(f"{self.name}: Сигнал AGREE_SHORT, но sentiment ({sentiment}) не позволяет открыть SHORT.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_SHORT but sentiment ({sentiment}) does not allow opening SHORT."
+                        )
 
             elif self.position_type == 'buy':
                 if signal == "AGREE_LONG":
                     if RECALCULATION_AFTER_REPEATED_SIGNAL:
-                        logging.info(f"{self.name}: RECALCULATION_AFTER_REPEATED_SIGNAL активирован. Пересчитываем SL для текущей LONG позиции.")
+                        logging.info(
+                            f"{self.name}: RECALCULATION_AFTER_REPEATED_SIGNAL enabled. Recalculating SL for current LONG position."
+                        )
                         await self.set_stop_loss_take_profit('buy', current_price, self.position_size)
                         action_taken = True
                     else:
-                        logging.info(f"{self.name}: Сигнал AGREE_LONG подтверждает удержание LONG.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_LONG confirms holding LONG."
+                        )
                 elif signal == "AGREE_SHORT":
-                    logging.info(f"{self.name}: Сигнал AGREE_SHORT. Закрываем LONG.")
+                    logging.info(f"{self.name}: Signal AGREE_SHORT. Closing LONG.")
                     await self.close_position(reason="Signal reverse to AGREE_SHORT")
                     action_taken = True
 
                     self.equity = await asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret)
                     if not self.news_check_enabled or sentiment == 'NEGATIVE':
-                        logging.info(f"{self.name}: Попытка реверса в SHORT после закрытия LONG.")
+                        logging.info(
+                            f"{self.name}: Attempting reversal to SHORT after closing LONG."
+                        )
                         qty = self.calculate_position_size(current_price)
                         if qty > 0:
                             await self.open_position('Sell', qty, current_price)
                     else:
-                        logging.info(f"{self.name}: Sentiment ({sentiment}) не позволяет реверс в SHORT.")
+                        logging.info(
+                            f"{self.name}: Sentiment ({sentiment}) does not allow reversal to SHORT."
+                        )
                 elif signal == "DISAGREE_SHORT" or signal == "NEUTRAL" or signal == "DISAGREE_LONG":
-                    logging.info(f"{self.name}: Сигнал {signal} указывает на ослабление/отсутствие LONG. Закрываем LONG.")
+                    logging.info(
+                        f"{self.name}: Signal {signal} indicates weakening/no LONG. Closing LONG."
+                    )
                     await self.close_position(reason=f"Close LONG on {signal} signal")
                     action_taken = True
 
             elif self.position_type == 'sell':
                 if signal == "AGREE_SHORT":
                     if RECALCULATION_AFTER_REPEATED_SIGNAL:
-                        logging.info(f"{self.name}: RECALCULATION_AFTER_REPEATED_SIGNAL активирован. Пересчитываем SL для текущей SHORT позиции.")
+                        logging.info(
+                            f"{self.name}: RECALCULATION_AFTER_REPEATED_SIGNAL enabled. Recalculating SL for current SHORT position."
+                        )
                         await self.set_stop_loss_take_profit('sell', current_price, self.position_size)
                         action_taken = True
                     else:
-                        logging.info(f"{self.name}: Сигнал AGREE_SHORT подтверждает удержание SHORT.")
+                        logging.info(
+                            f"{self.name}: Signal AGREE_SHORT confirms holding SHORT."
+                        )
                 elif signal == "AGREE_LONG":
-                    logging.info(f"{self.name}: Сигнал AGREE_LONG. Закрываем SHORT.")
+                    logging.info(f"{self.name}: Signal AGREE_LONG. Closing SHORT.")
                     await self.close_position(reason="Signal reverse to AGREE_LONG")
                     action_taken = True
 
                     self.equity = await asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret)
                     if not self.news_check_enabled or sentiment == 'POSITIVE':
-                        logging.info(f"{self.name}: Попытка реверса в LONG после закрытия SHORT.")
+                        logging.info(
+                            f"{self.name}: Attempting reversal to LONG after closing SHORT."
+                        )
                         qty = self.calculate_position_size(current_price)
                         if qty > 0:
                             await self.open_position('Buy', qty, current_price)
                     else:
-                        logging.info(f"{self.name}: Sentiment ({sentiment}) не позволяет реверс в LONG.")
+                        logging.info(
+                            f"{self.name}: Sentiment ({sentiment}) does not allow reversal to LONG."
+                        )
                 elif signal == "DISAGREE_LONG" or signal == "NEUTRAL" or signal == "DISAGREE_SHORT":
-                    logging.info(f"{self.name}: Сигнал {signal} указывает на ослабление/отсутствие SHORT. Закрываем SHORT.")
+                    logging.info(
+                        f"{self.name}: Signal {signal} indicates weakening/no SHORT. Closing SHORT."
+                    )
                     await self.close_position(reason=f"Close SHORT on {signal} signal")
                     action_taken = True
 
             if not action_taken:
-                logging.info(f"{self.name}: Текущий сигнал ({signal}) и позиция ({self.position_type}) не требуют действий.")
+                logging.info(
+                    f"{self.name}: Current signal ({signal}) and position ({self.position_type}) require no action."
+                )
 
         except Exception as e:
-            logging.exception(f"{self.name}: Критическая ошибка в методе trade: {e}")
+            logging.exception(f"{self.name}: Critical error in trade method: {e}")
         finally:
-            logging.debug(f"{self.name}: Завершение обработки сигналов версии {self.current_signal_version}")
+            logging.debug(
+                f"{self.name}: Finished processing signals version {self.current_signal_version}"
+            )
 
     async def open_position(self, side, qty, current_price):
-        """Открывает позицию и устанавливает SL/TP."""
+        """Open a position and set initial SL/TP levels."""
         if qty <= 0:
-            logging.warning(f"{self.name}: Попытка открыть позицию с нулевым или отрицательным количеством ({qty}).")
+            logging.warning(
+                f"{self.name}: Attempt to open a position with non-positive quantity ({qty})."
+            )
             return
 
         try:
-            log_msg = f"ACTION: Открытие {side.upper()} | Цена: {current_price:.4f} | Кол-во: {qty}"
+            log_msg = f"ACTION: Open {side.upper()} | Price: {current_price:.4f} | Qty: {qty}"
             self.log_signal(log_msg)
 
             order_response = await asyncio.to_thread(
@@ -733,20 +860,24 @@ class ModelBasedBot(Thread):
 
             if order_response.get('retCode') == 0 and order_response.get('result', {}).get('orderId'):
                 order_id = order_response['result']['orderId']
-                logging.info(f"{self.name}: Ордер на открытие {side.upper()} {qty} {self.symbol} успешно размещен (ID: {order_id}).")
+                logging.info(
+                    f"{self.name}: {side.upper()} order {qty} {self.symbol} placed successfully (ID: {order_id})."
+                )
                 self.position_type = side.lower()
                 self.position_size = qty
 
                 await self.set_stop_loss_take_profit(side, current_price, qty)
             else:
-                error_msg = order_response.get('retMsg', 'Неизвестная ошибка API')
-                logging.error(f"{self.name}: Не удалось разместить ордер на открытие {side.upper()}: {error_msg} (Код: {order_response.get('retCode')})")
+                error_msg = order_response.get('retMsg', 'Unknown API error')
+                logging.error(
+                    f"{self.name}: Failed to place {side.upper()} order: {error_msg} (Code: {order_response.get('retCode')})"
+                )
 
                 self.position_type = None
                 self.position_size = 0.0
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при открытии позиции {side.upper()}: {e}")
+            logging.exception(f"{self.name}: Error opening position {side.upper()}: {e}")
             self.position_type = None
             self.position_size = 0.0
 
@@ -756,17 +887,23 @@ class ModelBasedBot(Thread):
             df_atr = await asyncio.to_thread(fetch_data_with_metrics, self.api_key, self.api_secret, self.base_url, self.symbol, atr_tf, 100, 100, 3, self.data_dir)
 
             if df_atr.empty:
-                logging.warning(f"{self.name}: Не удалось получить данные для расчета ATR ({atr_tf}). SL/TP не установлены.")
+                logging.warning(
+                    f"{self.name}: Failed to fetch data for ATR calculation ({atr_tf}). SL/TP not set."
+                )
                 return
 
             atr_series = calculate_atr(df_atr)
             if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-                logging.warning(f"{self.name}: Не удалось рассчитать ATR. SL/TP не установлены.")
+                logging.warning(
+                    f"{self.name}: Failed to calculate ATR. SL/TP not set."
+                )
                 return
 
             last_atr = atr_series.iloc[-1]
             if last_atr <= 0:
-                logging.warning(f"{self.name}: Рассчитан невалидный ATR ({last_atr}). SL/TP не установлены.")
+                logging.warning(
+                    f"{self.name}: Calculated invalid ATR ({last_atr}). SL/TP not set."
+                )
                 return
 
             sl_multiplier = self.default_config["STOP_LOSS_ATR_MULTIPLIER"]
@@ -801,7 +938,7 @@ class ModelBasedBot(Thread):
                         sl_price = price + min_diff
                 if adjusted:
                     logging.info(
-                        f"{self.name}: Корректировка TP/SL согласно мин. порогу {min_pct*100:.0f}%: SL={sl_price:.4f}, TP={tp_price:.4f}"
+                        f"{self.name}: Adjusting TP/SL according to minimum threshold {min_pct*100:.0f}%: SL={sl_price:.4f}, TP={tp_price:.4f}"
                     )
 
             trailing_stop_distance = 0.0
@@ -809,50 +946,58 @@ class ModelBasedBot(Thread):
                 trailing_stop_distance = self.default_config["TRAILING_STOP_PERCENT"] * price
 
             logging.info(
-                f"{self.name}: Расчетные уровни: SL={sl_price:.4f}, TP={tp_price:.4f}, Trailing={trailing_stop_distance:.4f} (ATR={last_atr:.4f})"
+                f"{self.name}: Calculated levels: SL={sl_price:.4f}, TP={tp_price:.4f}, Trailing={trailing_stop_distance:.4f} (ATR={last_atr:.4f})"
             )
 
             stop_response = await asyncio.to_thread(set_trading_stop, self.base_url, self.api_key, self.api_secret, self.symbol, sl_price, tp_price, trailing_stop_distance, 'Full', self.default_config)
 
             if stop_response.get('retCode') == 0:
-                logging.info(f"{self.name}: Запрос на установку SL/TP успешно отправлен.")
+                logging.info(f"{self.name}: SL/TP set request sent successfully.")
             else:
-                error_msg = stop_response.get('retMsg', 'Неизвестная ошибка API')
+                error_msg = stop_response.get('retMsg', 'Unknown API error')
                 ignore_errors = ["stop loss price is not valid", "take profit price is not valid", "order quantity not match position side"]
                 should_log_error = True
                 for err in ignore_errors:
                     if err in error_msg.lower():
-                        logging.warning(f"{self.name}: Не удалось установить SL/TP (игнорируемая ошибка): {error_msg}")
+                        logging.warning(
+                            f"{self.name}: Could not set SL/TP (ignored error): {error_msg}"
+                        )
                         should_log_error = False
                         break
                      
                 if should_log_error:
-                    logging.error(f"{self.name}: Ошибка при установке SL/TP: {error_msg} (Код: {stop_response.get('retCode')})")
+                    logging.error(
+                        f"{self.name}: Error setting SL/TP: {error_msg} (Code: {stop_response.get('retCode')})"
+                    )
 
         except Exception as e:
-            logging.exception(f"{self.name}: Ошибка при установке SL/TP: {e}")
+            logging.exception(f"{self.name}: Error while setting SL/TP: {e}")
 
     async def close_position(self, reason="N/A", max_retries=3):
-        """Закрывает текущую открытую позицию."""
+        """Close the current open position."""
         if not self.position_type:
-            logging.info(f"{self.name}: Нет открытой позиции для закрытия.")
+            logging.info(f"{self.name}: No open position to close.")
             return
 
         current_pos_type = self.position_type
-        log_msg = f"ACTION: Закрытие {current_pos_type.upper()} | Причина: {reason}"
+        log_msg = f"ACTION: Close {current_pos_type.upper()} | Reason: {reason}"
         self.log_signal(log_msg)
 
         attempt = 0
         while attempt < max_retries:
             attempt += 1
-            logging.info(f"{self.name}: Попытка {attempt}/{max_retries} закрыть позицию {current_pos_type.upper()}...")
+            logging.info(
+                f"{self.name}: Attempt {attempt}/{max_retries} to close position {current_pos_type.upper()}..."
+            )
             try:
                 close_response = await asyncio.to_thread(
                     close_positions, self.base_url, self.api_key, self.api_secret, self.symbol
                 )
 
                 if close_response.get('retCode') == 0:
-                    logging.info(f"{self.name}: Ордер на закрытие позиции {current_pos_type.upper()} успешно размещен.")
+                    logging.info(
+                        f"{self.name}: Close order for {current_pos_type.upper()} placed successfully."
+                    )
                     await asyncio.sleep(2)
                     position_check = await asyncio.to_thread(get_open_position, self.base_url, self.api_key, self.api_secret, self.symbol)
 
@@ -863,42 +1008,56 @@ class ModelBasedBot(Thread):
                         is_closed = False
 
                     if is_closed:
-                        logging.info(f"{self.name}: Позиция {current_pos_type.upper()} успешно закрыта (подтверждено).")
+                        logging.info(
+                            f"{self.name}: Position {current_pos_type.upper()} closed successfully (confirmed)."
+                        )
                         self.position_type = None
                         self.position_size = 0.0
                         return
                     else:
-                        logging.warning(f"{self.name}: Позиция {current_pos_type.upper()} все еще активна после попытки закрытия {attempt}.")
+                        logging.warning(
+                            f"{self.name}: Position {current_pos_type.upper()} still active after close attempt {attempt}."
+                        )
                         if attempt >= max_retries:
-                             logging.error(f"{self.name}: Не удалось подтвердить закрытие позиции {current_pos_type.upper()} за {max_retries} попыток.")
+                             logging.error(
+                                 f"{self.name}: Could not confirm closing {current_pos_type.upper()} position after {max_retries} attempts."
+                             )
                              return
                 else:
-                    error_msg = close_response.get('retMsg', 'Неизвестная ошибка API')
+                    error_msg = close_response.get('retMsg', 'Unknown API error')
                     if "position idx not match position side" in error_msg or "order already cancelled or filled" in error_msg:
-                        logging.warning(f"{self.name}: Попытка закрыть позицию, но она уже закрыта или ордер исполнен: {error_msg}")
+                        logging.warning(
+                            f"{self.name}: Attempted to close position but it is already closed or order filled: {error_msg}"
+                        )
                         self.position_type = None
                         self.position_size = 0.0
                         return
                     else:
-                        logging.error(f"{self.name}: Ошибка API при попытке закрыть позицию {current_pos_type.upper()} (попытка {attempt}): {error_msg}")
+                        logging.error(
+                            f"{self.name}: API error while closing {current_pos_type.upper()} position (attempt {attempt}): {error_msg}"
+                        )
 
             except Exception as e:
-                logging.exception(f"{self.name}: Исключение при попытке закрыть позицию {current_pos_type.upper()} (попытка {attempt}): {e}")
+                logging.exception(
+                    f"{self.name}: Exception while closing {current_pos_type.upper()} position (attempt {attempt}): {e}"
+                )
 
             if attempt < max_retries:
                 await asyncio.sleep(attempt * 2)
 
-        logging.error(f"{self.name}: Не удалось закрыть позицию {current_pos_type.upper()} после {max_retries} попыток.")
+        logging.error(
+            f"{self.name}: Failed to close {current_pos_type.upper()} position after {max_retries} attempts."
+        )
 
     def log_signal(self, message):
-        """Логирует сообщение в файл сигналов и в основной лог."""
+        """Write a message to the signal log file and main log."""
         try:
             full_message = f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {self.name} - {message}"
             with open(self.signals_file, 'a', encoding='utf-8') as f:
                 f.write(full_message + '\n')
             logging.info(message)
         except Exception as e:
-            logging.error(f"{self.name}: Ошибка при записи в лог сигналов: {e}")
+            logging.error(f"{self.name}: Failed to write to signal log: {e}")
 
     def run(self):
         self.loop = asyncio.new_event_loop()
@@ -907,11 +1066,11 @@ class ModelBasedBot(Thread):
             self.loop.run_until_complete(self.initial_setup())
             self.loop.run_forever()
         except asyncio.CancelledError:
-             logging.info(f"{self.name}: Основной цикл прерван.")
+             logging.info(f"{self.name}: Main loop cancelled.")
         except Exception as e:
-            logging.critical(f"{self.name}: Критическая ошибка в основном цикле: {e}", exc_info=True)
+            logging.critical(f"{self.name}: Critical error in main loop: {e}", exc_info=True)
         finally:
-            logging.info(f"{self.name}: Начало завершения работы бота...")
+            logging.info(f"{self.name}: Beginning bot shutdown...")
 
             tasks = asyncio.all_tasks(loop=self.loop)
             for task in tasks:
@@ -921,26 +1080,26 @@ class ModelBasedBot(Thread):
                  self.loop.run_until_complete(self.loop.shutdown_asyncgens())
                  self.loop.stop()
                  self.loop.close()
-            logging.info(f"{self.name}: Бот остановлен.")
+            logging.info(f"{self.name}: Bot stopped.")
             asyncio.set_event_loop(None)
 
     def stop(self):
-         logging.info(f"{self.name}: Получен запрос на остановку.")
+         logging.info(f"{self.name}: Stop requested.")
          self.running = False
          if self.loop and self.loop.is_running():
               self.loop.call_soon_threadsafe(self.loop.stop)
 
 if __name__ == "__main__":
     if not init_models_once():
-        logging.critical("Не удалось загрузить модель LONG_TF. Запуск невозможен.")
+        logging.critical("Failed to load LONG_TF model. Startup aborted.")
         sys.exit(1)
 
-    logging.info("Получение начальных сигналов...")
+    logging.info("Fetching initial signals...")
     try:
         asyncio.run(get_signals_for_all_symbols(SYMBOLS))
         time.sleep(2)
     except Exception:
-        logging.exception("Ошибка при получении начальных сигналов.")
+        logging.exception("Error while obtaining initial signals.")
 
     trading_interval = TIMEFRAME_CONFIG["LONG_TF"].get("interval", "1h")
     accumulation = TIMEFRAME_CONFIG["LONG_TF"].get("candles_to_trade", 4)
@@ -956,7 +1115,7 @@ if __name__ == "__main__":
     enable_news_check = False
 
     for symbol in SYMBOLS:
-        logging.info(f"Создание бота для {symbol}...")
+        logging.info(f"Creating bot for {symbol}...")
         leverage = LEVERAGE_CONFIG.get(symbol, LEVERAGE_CONFIG.get("default", 30))
         bot = ModelBasedBot(
             API_KEY,
@@ -969,28 +1128,28 @@ if __name__ == "__main__":
         ws_manager.register_bot(bot)
         ALL_BOTS.append(bot)
 
-    logging.info("Запуск WebSocket менеджера...")
+    logging.info("Starting WebSocket manager...")
     ws_thread = ws_manager.start()
 
-    logging.info("Запуск потоков ботов...")
+    logging.info("Starting bot threads...")
     for bot in ALL_BOTS:
         bot.start()
 
     try:
         ws_thread.join()
-        logging.info("WebSocket менеджер завершил работу.")
+        logging.info("WebSocket manager finished.")
         for bot in ALL_BOTS:
             bot.join()
-            logging.info(f"Бот {bot.name} завершил работу.")
+            logging.info(f"Bot {bot.name} finished.")
 
     except KeyboardInterrupt:
-        logging.info("Получен сигнал KeyboardInterrupt. Начинаем остановку...")
+        logging.info("KeyboardInterrupt received. Stopping...")
     except Exception as e:
-        logging.critical(f"Необработанная ошибка в основном потоке: {e}", exc_info=True)
+        logging.critical(f"Unhandled error in main thread: {e}", exc_info=True)
     finally:
-        logging.info("Инициируем остановку WebSocket менеджера...")
+        logging.info("Stopping WebSocket manager...")
         ws_manager.stop()
-        logging.info("Инициируем остановку всех ботов...")
+        logging.info("Stopping all bots...")
         for bot in ALL_BOTS:
             bot.stop()
 
@@ -1000,11 +1159,11 @@ if __name__ == "__main__":
         shutdown_timeout = 35
         ws_thread.join(timeout=shutdown_timeout)
         if ws_thread.is_alive():
-             logging.warning("WebSocket поток не завершился в течение таймаута.")
+             logging.warning("WebSocket thread did not finish within timeout.")
 
         for bot in ALL_BOTS:
              bot.join(timeout=shutdown_timeout / len(ALL_BOTS) if ALL_BOTS else shutdown_timeout)
              if bot.is_alive():
-                  logging.warning(f"Поток бота {bot.name} не завершился в течение таймаута.")
+                  logging.warning(f"Bot thread {bot.name} did not finish within timeout.")
 
-        logging.info("Программа завершена.")
+        logging.info("Program finished.")
