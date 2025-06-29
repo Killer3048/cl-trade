@@ -26,6 +26,8 @@ class MomentClassifier:
         self._steps_since_train = 0
         self.moment: MOMENTPipeline | None = None
         self.is_trained = False
+        self.trained_epochs: int = 0
+        self.batches_per_epoch: list[int] = []
 
     def load_model(self):
         os.makedirs(self.results_output_dir, exist_ok=True)
@@ -125,7 +127,12 @@ class MomentClassifier:
         optimizer = torch.optim.Adam(self.moment.parameters(), lr=self.lr)
         best_val = float("-inf")
         patience = 0
-        for _ in range(self.epochs):
+        self.trained_epochs = 0
+        self.batches_per_epoch = []
+        for epoch in range(self.epochs):
+            total_correct = 0
+            total_samples = 0
+            steps = 0
             for step, (batch_x, batch_y) in enumerate(dataloader):
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
@@ -135,8 +142,15 @@ class MomentClassifier:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                pred = out.logits.argmax(dim=1)
+                total_correct += (pred == batch_y).sum().item()
+                total_samples += batch_y.size(0)
+                steps += 1
                 if step + 1 >= self.num_batches_per_epoch:
                     break
+            train_acc = total_correct / max(total_samples, 1)
+            self.batches_per_epoch.append(steps)
+            logger.info("Epoch %d train accuracy: %.4f", epoch + 1, train_acc)
             if val_loader is not None:
                 self.moment.eval()
                 total_correct = 0
@@ -150,16 +164,18 @@ class MomentClassifier:
                         total_correct += (logits.argmax(dim=1) == val_y).sum().item()
                         total_samples += val_y.size(0)
                 val_acc = total_correct / max(total_samples, 1)
-                logger.info("Validation accuracy: %.4f", val_acc)
+                logger.info("Epoch %d validation accuracy: %.4f", epoch + 1, val_acc)
                 if val_acc > best_val:
                     best_val = val_acc
                     patience = 0
                 else:
                     patience += 1
                     if patience >= self.early_stopping:
+                        self.trained_epochs = epoch + 1
                         logger.info("Early stopping")
                         break
                 self.moment.train()
+            self.trained_epochs = epoch + 1
         self.save_model()
         self._steps_since_train = 0
         self.is_trained = True

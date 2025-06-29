@@ -2,6 +2,7 @@ import math
 import os
 import pandas as pd
 import sys
+import logging
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from moment_classifier import MomentClassifier
@@ -143,3 +144,30 @@ def test_label_shift(tmp_path):
         past = closes[i + config["seq_len"] - 1]
         expected = 1 if future > past else 0
         assert target == expected
+
+
+def test_logging_and_early_stopping(tmp_path, caplog):
+    df = create_dummy_df(seq_len=8, steps=32)
+    config = {
+        "seq_len": 8,
+        "results_output_dir": tmp_path,
+        "all_time_retrain": False,
+        "model_name": "AutonLab/MOMENT-1-small",
+        "prediction_length": 1,
+        "epochs": 5,
+        "early_stopping": 1,
+        "num_batches_per_epoch": 1,
+        "batch_size": 8,
+    }
+    model = MomentClassifier(config)
+    model.load_model()
+    with caplog.at_level(logging.INFO):
+        model.fit(df, df)
+    # Should run at least one epoch and log train/val accuracy for each epoch
+    train_logs = [r for r in caplog.records if "train accuracy" in r.getMessage()]
+    val_logs = [r for r in caplog.records if "validation accuracy" in r.getMessage()]
+    assert len(train_logs) >= 1
+    assert len(train_logs) == len(val_logs)
+    assert model.trained_epochs == len(train_logs)
+    assert all(b == 1 for b in model.batches_per_epoch)
+    assert any("Early stopping" in r.getMessage() for r in caplog.records)
