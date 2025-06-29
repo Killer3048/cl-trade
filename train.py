@@ -108,7 +108,7 @@ def main():
         "num_batches_per_epoch": tf_config.get("num_batches_per_epoch", 50),
         "lr": tf_config.get("lr", 1e-4),
         "num_workers": tf_config.get("num_workers", 4),
-        "all_time_retrain": True,
+        "all_time_retrain": False,
         "save_on_improve": False, 
         "compile_model": True,
     }
