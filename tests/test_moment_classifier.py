@@ -12,15 +12,17 @@ def create_dummy_df(seq_len=16, steps=40, item="BTCUSDT"):
     data = []
     for i in range(steps):
         val = math.sin(i / 4)
-        data.append({
-            "item_id": item,
-            "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(minutes=i),
-            "open": val,
-            "high": val + 0.5,
-            "low": val - 0.5,
-            "close": val,
-            "volume": 1.0,
-        })
+        data.append(
+            {
+                "item_id": item,
+                "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(minutes=i),
+                "open": val,
+                "high": val + 0.5,
+                "low": val - 0.5,
+                "close": val,
+                "volume": 1.0,
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -99,3 +101,19 @@ def test_split_and_evaluate(tmp_path):
     model.fit(train_df)
     acc = evaluate(model, test_df)
     assert 0.0 <= acc <= 1.0
+
+
+def test_split_by_item_multiple(tmp_path):
+    df_a = create_dummy_df(seq_len=16, steps=20, item="A")
+    df_b = create_dummy_df(seq_len=16, steps=20, item="B")
+    df = pd.concat([df_a, df_b], ignore_index=True)
+    train_df, test_df = split_by_item(df, test_ratio=0.3)
+
+    for item_id, group in df.groupby("item_id"):
+        total_len = len(group)
+        train_len = len(train_df[train_df["item_id"] == item_id])
+        test_len = len(test_df[test_df["item_id"] == item_id])
+        assert train_len + test_len == total_len
+        # Allow one-off rounding difference
+        expected_train_len = int(total_len * 0.7)
+        assert abs(train_len - expected_train_len) <= 1
