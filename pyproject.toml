@@ -9,6 +9,7 @@ readme = "README.md"
 python = ">=3.9,<3.13"
 momentfm = "0.1.4"
 scikit-learn = "*"
+gluonts = "*"
 
 [build-system]
 requires = ["poetry-core"]
