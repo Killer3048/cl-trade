@@ -7,7 +7,6 @@ import torch
 
 from moment_classifier import MomentClassifier
 
-# --- НОВЫЙ БЛОК: ЕДИНЫЙ ИСТОЧНИК КОНФИГУРАЦИИ ---
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 try:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -15,7 +14,6 @@ try:
 except FileNotFoundError:
     logging.critical(f"Конфигурационный файл не найден по пути: {CONFIG_PATH}")
     exit(1)
-# ---------------------------------------------------
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -55,14 +53,11 @@ def evaluate(model: MomentClassifier, df: pd.DataFrame, num_workers: int = 0) ->
 def main():
     setup_logging()
     
-    # --- НОВЫЙ БЛОК: КОНФИГУРАЦИЯ ИЗ ФАЙЛА ---
     logging.info("--- Starting Training Script ---")
     logging.info(f"Loading configuration from {CONFIG_PATH}")
     
-    # Путь к данным для обучения. Измените его здесь, если нужно.
     csv_path = "full_1h.csv"
     
-    # Используем конфигурацию для LONG_TF из основного конфига
     tf_config = CONFIG["timeframe_config"]["LONG_TF"]
     
     training_config = {
@@ -80,7 +75,6 @@ def main():
         "compile_model": True
     }
     logging.info(f"Training configuration: {training_config}")
-    # ---------------------------------------------
     
     try:
         df = pd.read_csv(csv_path, parse_dates=["timestamp"])

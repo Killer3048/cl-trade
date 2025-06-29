@@ -32,9 +32,6 @@ from apiBybit_past import (
 
 from prediction_manager import PredictionManager
 
-# ---------------------------------------------------------------------------
-# Load configuration from config.json
-# ---------------------------------------------------------------------------
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
@@ -58,7 +55,6 @@ CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get(
 NEWS_LIMIT = CONFIG.get("news", {}).get("limit", 100)
 NEWS_TIMEOUT = CONFIG.get("news", {}).get("timeout", 20)
 MAIN_COINS = CONFIG.get("main_coins", ["BTCUSDT", "ETHUSDT"])
-# Flag indicating whether we should always retrain using the full history.
 ALL_TIME_RETRAIN = bool(CONFIG.get("all_time_retrain", False))
 API_KEY = CONFIG.get("api_key", "")
 API_SECRET = CONFIG.get("api_secret", "")
@@ -197,8 +193,6 @@ class WebSocketManager:
         self.bots = []
         self.last_candle_open_time = None
         self.loop = None
-
-        # Новые поля для накопления подтверждённых свечей
         self.candle_accumulation_threshold = accumulation
         self.confirmed_candles_counter = 0
 
@@ -268,14 +262,12 @@ class WebSocketManager:
 
                          if confirm and start is not None:
                              current_start_time = int(start)
-                             # Если пришла новая свеча (по времени открытия) – увеличиваем счётчик
                              if current_start_time != self.last_candle_open_time:
                                  self.last_candle_open_time = current_start_time
                                  self.confirmed_candles_counter += 1
                                  logging.info(f"WebSocketManager: Подтверждена свеча ({self.interval_str}) [{self.confirmed_candles_counter}/{self.candle_accumulation_threshold}], timestamp={current_start_time}")
                                  
                                  if self.confirmed_candles_counter >= self.candle_accumulation_threshold:
-                                     # Сброс счетчика и запуск логики торговли
                                      self.confirmed_candles_counter = 0
                                      await get_signals_for_all_symbols(SYMBOLS)
                                      await GLOBAL_SIGNALS_UPDATE_EVENT.wait()
@@ -643,7 +635,6 @@ class ModelBasedBot(Thread):
             action_taken = False
 
             if self.position_type is None:
-                # Если позиции нет, обновляем баланс перед расчетом размера позиции
                 self.equity = await asyncio.to_thread(get_account_balance, self.base_url, self.api_key, self.api_secret)
                 if signal == "AGREE_LONG":
                     if not self.news_check_enabled or sentiment == 'POSITIVE':
@@ -762,7 +753,7 @@ class ModelBasedBot(Thread):
     async def set_stop_loss_take_profit(self, side, price, qty):
         try:
             atr_tf = TIMEFRAME_CONFIG['LONG_TF']['interval']
-            df_atr = await asyncio.to_thread(fetch_data_with_metrics, self.api_key, self.api_secret, self.base_url, self.symbol, atr_tf, 100, 100, 3, self.data_dir) # 100 свечей должно хватить
+            df_atr = await asyncio.to_thread(fetch_data_with_metrics, self.api_key, self.api_secret, self.base_url, self.symbol, atr_tf, 100, 100, 3, self.data_dir)
 
             if df_atr.empty:
                 logging.warning(f"{self.name}: Не удалось получить данные для расчета ATR ({atr_tf}). SL/TP не установлены.")
@@ -793,7 +784,6 @@ class ModelBasedBot(Thread):
 
                 if tp_price <= 0: tp_price = price * 0.01
 
-            # Ensure TP/SL difference meets Bybit minimum requirements
             if min_pct > 0:
                 min_diff = price * min_pct
                 adjusted = False
