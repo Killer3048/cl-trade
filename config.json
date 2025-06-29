@@ -14,7 +14,8 @@
       "interval": "1h",
       "candles_to_trade": 1,
       "prediction_length": 1,
-      "results_output_dir": "1h_4pred"
+      "results_output_dir": "1h_4pred",
+      "batch_size": 32
     }
   },
   "all_time_retrain": false,
