@@ -61,7 +61,8 @@ CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get(
 NEWS_LIMIT = CONFIG.get("news", {}).get("limit", 100)
 NEWS_TIMEOUT = CONFIG.get("news", {}).get("timeout", 20)
 MAIN_COINS = CONFIG.get("main_coins", ["BTCUSDT", "ETHUSDT"])
-ALL_TIME_RETRAIN = int(CONFIG.get("all_time_retrain", 0))
+# Flag indicating whether we should always retrain using the full history.
+ALL_TIME_RETRAIN = bool(CONFIG.get("all_time_retrain", False))
 API_KEY = CONFIG.get("api_key", "")
 API_SECRET = CONFIG.get("api_secret", "")
 BASE_URL = CONFIG.get("base_url", "https://api-demo.bybit.com")

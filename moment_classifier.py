@@ -15,7 +15,9 @@ class MomentClassifier:
         self.seq_len = config.get("seq_len", 64)
         self.model_name = config.get("model_name", "AutonLab/MOMENT-1-large")
         self.results_output_dir = config.get("results_output_dir", "moment_model")
-        self.retrain_interval = int(config.get("all_time_retrain", 0))
+        # If all_time_retrain flag is True we retrain on every prediction step.
+        # Otherwise the classifier will not be automatically retrained.
+        self.retrain_interval = 1 if config.get("all_time_retrain", False) else 0
         self._steps_since_train = 0
         self.moment: MOMENTPipeline | None = None
         self.classifier = None
