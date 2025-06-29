@@ -30,7 +30,7 @@ from apiBybit_past import (
     calculate_atr
 )
 
-from ttm import ChronosPredictor
+from moment_classifier import MomentClassifier
 
 # ---------------------------------------------------------------------------
 # Load configuration from config.json
@@ -61,7 +61,7 @@ CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get(
 NEWS_LIMIT = CONFIG.get("news", {}).get("limit", 100)
 NEWS_TIMEOUT = CONFIG.get("news", {}).get("timeout", 20)
 MAIN_COINS = CONFIG.get("main_coins", ["BTCUSDT", "ETHUSDT"])
-ALL_TIME_RETRAIN = CONFIG.get("all_time_retrain", True)
+ALL_TIME_RETRAIN = int(CONFIG.get("all_time_retrain", 0))
 API_KEY = CONFIG.get("api_key", "")
 API_SECRET = CONFIG.get("api_secret", "")
 BASE_URL = CONFIG.get("base_url", "https://api-demo.bybit.com")
@@ -86,7 +86,7 @@ logging.basicConfig(
 )
 
 
-GLOBAL_MODEL_LONG_TF: ChronosPredictor = None
+GLOBAL_MODEL_LONG_TF: MomentClassifier = None
 
 GLOBAL_SIGNALS_LONG_TF = {}
 
@@ -104,26 +104,13 @@ def init_models_once():
 
     try:
         config_long_tf = {
-            "model_type": "target",
-            "freq": long_config["freq"],
-            "prediction_length": long_config["prediction_length"],
-            "results_output_dir": long_config["results_output_dir"],
-            "confidence_threshold": long_config.get("confidence_threshold", 0.62),
-            "use_ensemble": long_config["use_ensemble"],
-            "use_kernel_filter": long_config.get("use_kernel_filter", True),
-            "kernel_lookback": long_config.get("kernel_lookback", 8),
-            "kernel_r": long_config.get("kernel_r", 8.0),
-            "kernel_start_at": long_config.get("kernel_start_at", 25),
-            "mode": long_config.get("mode", "indicators"),
-            "known_covariates": long_config.get("known_covariates", []),
+            "seq_len": long_config.get("seq_len", 64),
+            "results_output_dir": long_config.get("results_output_dir", "moment_model"),
+            "model_name": long_config.get("model_name", "AutonLab/MOMENT-1-large"),
             "all_time_retrain": ALL_TIME_RETRAIN,
         }
-        model_long_tf = ChronosPredictor(config_long_tf)
+        model_long_tf = MomentClassifier(config_long_tf)
         model_long_tf.load_model()
-
-        if model_long_tf.predictor is None:
-            logging.error(f"Модель LONG_TF ({long_config['interval']}) не загружена! Ошибка.")
-            raise RuntimeError(f"{long_config['interval']} model load error")
 
         GLOBAL_MODEL_LONG_TF = model_long_tf
         logging.info("LONG_TF модель успешно загружена.")
@@ -181,7 +168,7 @@ async def get_signals_for_all_symbols(symbols):
             candles = 12000 if ALL_TIME_RETRAIN else 4000
             df = await fetch_market_data_for_symbols(symbols, long_config["interval"], total_candles=candles)
         if not df.empty:
-            return GLOBAL_MODEL_LONG_TF.run(df)
+            return GLOBAL_MODEL_LONG_TF.predict(df)
         else:
             return {sym: "NEUTRAL" for sym in symbols}
 
