@@ -2,6 +2,7 @@ import argparse
 import pandas as pd
 from sklearn.metrics import accuracy_score
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
 from moment_classifier import MomentClassifier
 
@@ -24,13 +25,21 @@ def evaluate(model: MomentClassifier, df: pd.DataFrame) -> float:
     if len(y) == 0:
         return 0.0
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    dataset = TensorDataset(
+        torch.tensor(X, dtype=torch.float32),
+        torch.tensor(y, dtype=torch.long),
+    )
+    loader = DataLoader(dataset, batch_size=model.batch_size, shuffle=False)
     model.moment.to(device)
     model.moment.eval()
+    preds = []
     with torch.no_grad():
-        tensor_x = torch.tensor(X, dtype=torch.float32).to(device)
-        mask = torch.ones(tensor_x.shape[0], model.seq_len, dtype=torch.long).to(device)
-        logits = model.moment(x_enc=tensor_x, input_mask=mask).logits
-        preds = logits.argmax(dim=1).cpu().numpy()
+        for batch_x, _ in loader:
+            batch_x = batch_x.to(device)
+            mask = torch.ones(batch_x.shape[0], model.seq_len, dtype=torch.long).to(device)
+            logits = model.moment(x_enc=batch_x, input_mask=mask).logits
+            preds.append(logits.argmax(dim=1).cpu())
+    preds = torch.cat(preds).numpy()
     return accuracy_score(y, preds)
 
 

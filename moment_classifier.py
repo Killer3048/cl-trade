@@ -1,6 +1,8 @@
 import os
 import logging
 from typing import Dict, List
+from gluonts.dataset.common import ListDataset
+from gluonts.dataset.field_names import FieldName
 import numpy as np
 import pandas as pd
 import torch
@@ -16,8 +18,10 @@ class MomentClassifier:
         self.model_name = config.get("model_name", "AutonLab/MOMENT-1-large")
         self.results_output_dir = config.get("results_output_dir", "moment_model")
         self.retrain_interval = 1 if config.get("all_time_retrain", False) else 0
-        self.epochs = config.get("epochs", 1)
+        self.epochs = config.get("epochs", 100)
         self.batch_size = config.get("batch_size", 32)
+        self.num_batches_per_epoch = config.get("num_batches_per_epoch", 50)
+        self.early_stopping = config.get("early_stopping", 20)
         self.lr = config.get("lr", 1e-4)
         self._steps_since_train = 0
         self.moment: MOMENTPipeline | None = None
@@ -44,14 +48,34 @@ class MomentClassifier:
 
     def _build_sequences(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         df = df.sort_values(["item_id", "timestamp"])
+        freq = pd.infer_freq(df["timestamp"])
+        if freq is None:
+            freq = "1min"
+        dataset = ListDataset(
+            [
+                {
+                    FieldName.START: group["timestamp"].iloc[0],
+                    FieldName.TARGET: group["close"].to_numpy(float),
+                    FieldName.FEAT_DYNAMIC_REAL: [
+                        group["open"].to_numpy(float),
+                        group["high"].to_numpy(float),
+                        group["low"].to_numpy(float),
+                        group["close"].to_numpy(float),
+                        group["volume"].to_numpy(float),
+                    ],
+                }
+                for _, group in df.groupby("item_id")
+            ],
+            freq=freq,
+        )
+
         X_list: List[np.ndarray] = []
         y_list: List[int] = []
-        for item_id, group in df.groupby("item_id"):
-            group = group.reset_index(drop=True)
-            closes = group["close"].to_numpy(float)
-            vals = group[["open", "high", "low", "close", "volume"]].to_numpy(float)
-            for i in range(len(group) - self.seq_len - self.pred_len + 1):
-                seq = vals[i : i + self.seq_len].T
+        for entry in dataset:
+            closes = np.array(entry[FieldName.TARGET], dtype=float)
+            feats = np.array(entry[FieldName.FEAT_DYNAMIC_REAL], dtype=float)
+            for i in range(len(closes) - self.seq_len - self.pred_len + 1):
+                seq = feats[:, i : i + self.seq_len]
                 future_idx = i + self.seq_len + self.pred_len - 1
                 past_idx = i + self.seq_len - 1
                 target = 1 if closes[future_idx] > closes[past_idx] else 0
@@ -99,8 +123,10 @@ class MomentClassifier:
         self.moment.train()
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.moment.parameters(), lr=self.lr)
+        best_val = float("-inf")
+        patience = 0
         for _ in range(self.epochs):
-            for batch_x, batch_y in dataloader:
+            for step, (batch_x, batch_y) in enumerate(dataloader):
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
                 mask = torch.ones(batch_x.shape[0], self.seq_len, dtype=torch.long).to(device)
@@ -109,6 +135,8 @@ class MomentClassifier:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                if step + 1 >= self.num_batches_per_epoch:
+                    break
             if val_loader is not None:
                 self.moment.eval()
                 total_correct = 0
@@ -123,6 +151,14 @@ class MomentClassifier:
                         total_samples += val_y.size(0)
                 val_acc = total_correct / max(total_samples, 1)
                 logger.info("Validation accuracy: %.4f", val_acc)
+                if val_acc > best_val:
+                    best_val = val_acc
+                    patience = 0
+                else:
+                    patience += 1
+                    if patience >= self.early_stopping:
+                        logger.info("Early stopping")
+                        break
                 self.moment.train()
         self.save_model()
         self._steps_since_train = 0
