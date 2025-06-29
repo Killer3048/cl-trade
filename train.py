@@ -48,6 +48,7 @@ def evaluate(model: MomentClassifier, df: pd.DataFrame, num_workers: int = 0) ->
     logging.info("Starting final evaluation...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    # --- ИЗМЕНЕНИЕ: Используем 'evaluation', который теперь обрабатывается как 'validation' ---
     X, y, _ = model._build_sequences(df, purpose="evaluation")
     if y.size == 0:
         logging.warning("No sequences generated for evaluation. Returning 0.0 accuracy.")
@@ -82,7 +83,9 @@ def main():
         "num_workers": tf_config.get("num_workers", 4),
         "all_time_retrain": True,
         "save_on_improve": False, 
-        "compile_model": True
+        "compile_model": True,
+        # --- ИЗМЕНЕНИЕ: Добавляем новый параметр в конфигурацию обучения ---
+        "num_val_windows": 3 
     }
     logging.info(f"Training configuration: {training_config}")
     

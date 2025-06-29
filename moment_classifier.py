@@ -17,6 +17,8 @@ class MomentClassifier:
     def __init__(self, config: dict):
         self.seq_len = config.get("seq_len", 512)
         self.pred_len = config.get("prediction_length", 1)
+        # --- ИЗМЕНЕНИЕ 1: Добавлен новый параметр для количества валидационных окон ---
+        self.num_val_windows = config.get("num_val_windows", 1) 
         self.model_name = config.get("model_name", "AutonLab/MOMENT-1-large")
         self.results_output_dir = config.get("results_output_dir", "moment_model")
         self.epochs = config.get("epochs", 100)
@@ -32,7 +34,8 @@ class MomentClassifier:
         self.is_trained = False
         self.trained_epochs: int = 0
         
-        logger.info(f"MomentClassifier initialized. Seq Len: {self.seq_len}, Pred Len: {self.pred_len}, Full Retrain: {self.all_time_retrain}")
+        # --- ИЗМЕНЕНИЕ 2: Обновлено логгирование для отображения нового параметра ---
+        logger.info(f"MomentClassifier initialized. Seq Len: {self.seq_len}, Pred Len: {self.pred_len}, Num Val Windows: {self.num_val_windows}, Full Retrain: {self.all_time_retrain}")
 
     def load_model(self):
         """Load MOMENT model weights and prepare the pipeline."""
@@ -124,17 +127,36 @@ class MomentClassifier:
                 X_list.append(seq)
                 item_ids.append(item_id)
             
-            elif purpose == "validation":
-                required_len = self.seq_len + self.pred_len
+            # --- ИЗМЕНЕНИЕ 3: Полностью переработан блок для валидации и оценки ---
+            # Теперь он обрабатывает и 'validation', и 'evaluation' одинаково
+            elif purpose in ["validation", "evaluation"]:
+                # Требуемая длина теперь зависит от количества окон, которые мы хотим извлечь.
+                # seq_len + pred_len для одного окна, и +1 за каждое дополнительное окно.
+                required_len = self.seq_len + self.pred_len + self.num_val_windows - 1
                 if group_len < required_len:
-                    logger.warning(f"Skipping '{item_id}' for validation: not enough data. Have {group_len}, need {required_len}.")
+                    logger.warning(f"Skipping '{item_id}' for {purpose}: not enough data. Have {group_len}, need {required_len} for {self.num_val_windows} windows.")
                     continue
                 
-                seq = feats[:, -required_len:-self.pred_len]
-                target = 1 if closes[-1] > closes[-self.pred_len - 1] else 0
-                X_list.append(seq)
-                y_list.append(target)
-                item_ids.append(item_id)
+                # Создаем N валидационных окон, идя с конца временного ряда
+                for i in range(self.num_val_windows):
+                    # i=0 - самое последнее окно, i=1 - предпоследнее и т.д.
+                    
+                    # Определяем индексы для среза признаков (X)
+                    end_idx_x = -self.pred_len - i
+                    start_idx_x = end_idx_x - self.seq_len
+                    
+                    # Python срезы: [start:end]. Если end_idx_x=0, это значит до самого конца.
+                    # Но срез [X:0] пустой, поэтому нужно [X:].
+                    seq = feats[:, start_idx_x : (end_idx_x if end_idx_x != 0 else None)]
+                    
+                    # Определяем индексы для расчета цели (y)
+                    target_close_idx = -1 - i
+                    prev_close_idx = -self.pred_len - 1 - i
+                    target = 1 if closes[target_close_idx] > closes[prev_close_idx] else 0
+                    
+                    X_list.append(seq)
+                    y_list.append(target)
+                    item_ids.append(item_id)
 
         if not X_list:
             logger.warning(f"No sequences were generated for purpose '{purpose}' from the provided data.")
@@ -160,6 +182,7 @@ class MomentClassifier:
 
         X_val, y_val = None, None
         if val_df is not None:
+            # Используем purpose="validation"
             X_val, y_val, _ = self._build_sequences(val_df, "validation")
             if X_val.size > 0:
                 logger.info(f"Validation data prepared: {X_val.shape[0]} samples.")
