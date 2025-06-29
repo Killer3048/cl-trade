@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 from sklearn.metrics import accuracy_score
+import torch
 
 from moment_classifier import MomentClassifier
 
@@ -22,8 +23,14 @@ def evaluate(model: MomentClassifier, df: pd.DataFrame) -> float:
     X, y = model._build_sequences(df)
     if len(y) == 0:
         return 0.0
-    feats = model._embed(X)
-    preds = model.classifier.predict(feats)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.moment.to(device)
+    model.moment.eval()
+    with torch.no_grad():
+        tensor_x = torch.tensor(X, dtype=torch.float32).to(device)
+        mask = torch.ones(tensor_x.shape[0], model.seq_len, dtype=torch.long).to(device)
+        logits = model.moment(x_enc=tensor_x, input_mask=mask).logits
+        preds = logits.argmax(dim=1).cpu().numpy()
     return accuracy_score(y, preds)
 
 
@@ -32,6 +39,7 @@ def main():
     parser.add_argument("csv_path", help="CSV file with columns item_id, timestamp, open, high, low, close, volume")
     parser.add_argument("--output_dir", default="moment_model")
     parser.add_argument("--seq_len", type=int, default=64)
+    parser.add_argument("--prediction_length", type=int, default=1)
     parser.add_argument("--model_name", default="AutonLab/MOMENT-1-large")
     args = parser.parse_args()
 
@@ -42,11 +50,12 @@ def main():
         "seq_len": args.seq_len,
         "results_output_dir": args.output_dir,
         "model_name": args.model_name,
+        "prediction_length": args.prediction_length,
         "all_time_retrain": False,
     }
     model = MomentClassifier(config)
     model.load_model()
-    model.fit(train_df)
+    model.fit(train_df, test_df)
 
     signals = model.predict(test_df)
     print("Sample signals:", signals)
