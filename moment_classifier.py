@@ -101,35 +101,52 @@ class MomentClassifier:
         
         df = df.sort_values(["item_id", "timestamp"])
         X_list, y_list, item_ids = [], [], []
-        required_len = self.seq_len + self.pred_len
-        logger.info(f"Required data length per item: {required_len} (seq_len={self.seq_len} + pred_len={self.pred_len})")
-
+        
         for item_id, group in df.groupby("item_id"):
             group_len = len(group)
-            if group_len < required_len:
-                logger.warning(f"Skipping '{item_id}': not enough data. Have {group_len}, need {required_len}.")
-                continue
-            
-            closes = group["close"].to_numpy(dtype=np.float32)
             feats = group[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float32).T
-            
+            closes = group["close"].to_numpy(dtype=np.float32)
+
             if purpose == "training":
+                required_len = self.seq_len + self.pred_len
+                if group_len < required_len:
+                    logger.warning(f"Skipping '{item_id}' for training: not enough data. Have {group_len}, need {required_len}.")
+                    continue
                 for i in range(len(closes) - required_len + 1):
                     X_list.append(feats[:, i : i + self.seq_len])
                     y_list.append(1 if closes[i + required_len - 1] > closes[i + self.seq_len - 1] else 0)
-            else:
+            
+            elif purpose == "prediction":
+                required_len = self.seq_len
+                if group_len < required_len:
+                    logger.warning(f"Skipping '{item_id}' for prediction: not enough data. Have {group_len}, need {required_len}.")
+                    continue
+
+                seq = feats[:, -required_len:]
+                X_list.append(seq)
+                item_ids.append(item_id)
+            
+            elif purpose == "validation":
+                required_len = self.seq_len + self.pred_len
+                if group_len < required_len:
+                    logger.warning(f"Skipping '{item_id}' for validation: not enough data. Have {group_len}, need {required_len}.")
+                    continue
+                
                 seq = feats[:, -required_len:-self.pred_len]
                 target = 1 if closes[-1] > closes[-self.pred_len - 1] else 0
                 X_list.append(seq)
                 y_list.append(target)
                 item_ids.append(item_id)
-        
+
         if not X_list:
             logger.warning(f"No sequences were generated for purpose '{purpose}' from the provided data.")
             return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
         
-        X, y = np.stack(X_list), np.array(y_list, dtype=np.int64)
-        logger.info(f"Successfully generated {len(y)} sequences for '{purpose}' in {time.time() - start_time:.2f}s. Final shape of X: {X.shape}")
+        X = np.stack(X_list)
+        # Обрабатываем случай, когда y_list пуст (для purpose='prediction')
+        y = np.array(y_list, dtype=np.int64) if y_list else np.empty((0,), dtype=np.int64)
+        
+        logger.info(f"Successfully generated {len(X)} sequences for '{purpose}' in {time.time() - start_time:.2f}s. Final shape of X: {X.shape}")
         return X, y, item_ids
 
     def fit(self, df: pd.DataFrame, val_df: pd.DataFrame | None = None, num_workers: int = 0):
