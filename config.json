@@ -1,0 +1,37 @@
+{
+  "api_key": "lF9NRgJr5v5WWCYg7n",
+  "api_secret": "XpXnbcZIErzmrq1FbTbAsAmCjXqEhDLyBQmT",
+  "base_url": "https://api-demo.bybit.com",
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT", "LINKUSDT"],
+  "leverage": {
+    "default": 30,
+    "BTCUSDT": 100,
+    "ETHUSDT": 100
+  },
+  "timeframe_config": {
+    "LONG_TF": {
+      "use": true,
+      "interval": "1h",
+      "freq": "1h",
+      "candles_to_trade": 1,
+      "prediction_length": 1,
+      "mode": "target",
+      "results_output_dir": "1h_4pred",
+      "confidence_threshold": 0.55,
+      "use_ensemble": true,
+      "known_covariates": [],
+      "use_kernel_filter": true,
+      "kernel_lookback": 8,
+      "kernel_r": 8.0,
+      "kernel_start_at": 25
+    }
+  },
+  "all_time_retrain": true,
+  "recalc_after_repeated_signal": true,
+  "news": {
+    "cryptocompare_api_key": "498c3e7767e15dee7f938b17b41cdbaf026c184acf76dbf0e67c84cd17587eb9",
+    "limit": 100,
+    "timeout": 20
+  },
+  "main_coins": ["BTCUSDT", "ETHUSDT"]
+}

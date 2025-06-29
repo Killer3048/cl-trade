@@ -1,0 +1,13 @@
+[tool.poetry]
+name = "cl-trade"
+version = "0.0.1"
+description = "Trading forecasting utilities"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
