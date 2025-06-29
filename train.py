@@ -12,13 +12,21 @@ try:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         CONFIG = json.load(f)
 except FileNotFoundError:
-    logging.critical(f"Конфигурационный файл не найден по пути: {CONFIG_PATH}")
+    logging.critical(
+        f"Configuration file not found at path: {CONFIG_PATH}"
+    )
     exit(1)
 
 def setup_logging():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    """Configure global logging format for the training script."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
 def split_by_item(df: pd.DataFrame, test_ratio: float = 0.2):
+    """Split DataFrame into train and test parts preserving item groups."""
     logging.info(f"Splitting data with test_ratio={test_ratio}...")
     train_parts, test_parts = [], []
     for _, group in df.groupby("item_id"):
@@ -36,6 +44,7 @@ def split_by_item(df: pd.DataFrame, test_ratio: float = 0.2):
     return train_df, test_df
 
 def evaluate(model: MomentClassifier, df: pd.DataFrame, num_workers: int = 0) -> float:
+    """Evaluate a trained model on a dataset and return accuracy."""
     logging.info("Starting final evaluation...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -51,6 +60,7 @@ def evaluate(model: MomentClassifier, df: pd.DataFrame, num_workers: int = 0) ->
     return model.evaluate_on_loader(loader, device)
 
 def main():
+    """Entry point for training the MomentClassifier model."""
     setup_logging()
     
     logging.info("--- Starting Training Script ---")

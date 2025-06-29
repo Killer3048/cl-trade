@@ -45,7 +45,9 @@ def retry_on_failure(max_attempts=5, delay=2, backoff=2):
                     attempts += 1
                     logging.error(f"APIRequestError in {func.__name__}: {e}. Attempt {attempts}/{max_attempts}")
                     if "not modified" in str(e).lower():
-                        logging.warning(f"{func.__name__}: Специфическая ошибка '{e}', пропускаем дальнейшие попытки.")
+                    logging.warning(
+                        f"{func.__name__}: Specific error '{e}', skipping further retries."
+                    )
                         break
                 except Exception as e:
                     attempts += 1
@@ -70,7 +72,9 @@ def retry_async(max_attempts=5, delay=2, backoff=2):
                     attempts += 1
                     logging.error(f"APIRequestError in {func.__name__}: {e}. Attempt {attempts}/{max_attempts}")
                     if "not modified" in str(e).lower():
-                        logging.warning(f"{func.__name__}: Специфическая ошибка '{e}', пропускаем дальнейшие попытки.")
+                    logging.warning(
+                        f"{func.__name__}: Specific error '{e}', skipping further retries."
+                    )
                         break
                 except Exception as e:
                     attempts += 1
@@ -90,14 +94,7 @@ def create_symbol_dir(data_dir, symbol):
 
 @retry_on_failure(max_attempts=10, delay=3, backoff=2)
 def get_open_position(base_url, api_key, api_secret, symbol):
-    """
-    Получение открытой позиции.
-    Возвращает словарь с данными позиции, если позиция существует,
-    или None, если открытых позиций не найдено.
-    
-    Дополнительно, если поле 'unrealisedPnl' присутствует,
-    приводим его к типу float для удобства дальнейших проверок.
-    """
+    """Retrieve the current open position if it exists."""
     try:
         endpoint = '/v5/position/list'
         params = {
@@ -123,10 +120,10 @@ def get_open_position(base_url, api_key, api_secret, symbol):
                         position['unrealisedPnl'] = float(position['unrealisedPnl'])
                     except ValueError:
                         position['unrealisedPnl'] = 0.0
-                logging.info(f"Получена открытая позиция для {symbol}: {position}")
+                logging.info(f"Open position for {symbol}: {position}")
                 return position
         
-        logging.info(f"Открытых позиций для {symbol} не найдено.")
+        logging.info(f"No open positions found for {symbol}.")
         return None
 
     except requests.exceptions.RequestException as e:
@@ -145,10 +142,10 @@ def close_positions(base_url, api_key, api_secret, symbol):
             side = 'Sell' if open_position['side'] == 'Buy' else 'Buy'
             qty = open_position['size']
             response = place_order(base_url, api_key, api_secret, symbol, side, qty)
-            logging.info(f"Закрыта позиция для {symbol}: {response}")
+            logging.info(f"Closed position for {symbol}: {response}")
             return {'retCode': 0, 'retMsg': 'Position closed'}
         else:
-            logging.info(f"Нет открытых позиций для закрытия по символу: {symbol}")
+            logging.info(f"No open positions to close for symbol: {symbol}")
             return {'retCode': 0, 'retMsg': 'No open positions'}
     except APIRequestError as e:
         logging.error(f"API error while closing positions for {symbol}: {e}")
@@ -209,7 +206,7 @@ def switch_to_cross_margin(base_url, api_key, api_secret, symbol):
                 return result
             else:
                 raise APIRequestError(f"API Error: {result.get('retMsg')}")
-        logging.info(f"Режим маржи переключен для {symbol}: {result}")
+        logging.info(f"Cross margin mode switched for {symbol}: {result}")
         return result
     except requests.exceptions.Timeout:
         logging.error(f"Timeout error in switch_to_cross_margin for {symbol}")
@@ -247,7 +244,7 @@ def set_leverage(base_url, api_key, api_secret, symbol, desired_leverage, defaul
                 return result
             else:
                 raise APIRequestError(f"API Error: {result.get('retMsg')}")
-        logging.info(f"Плечо установлено для {symbol}: {result}")
+        logging.info(f"Leverage set for {symbol}: {result}")
         return result
     except requests.exceptions.Timeout:
         logging.error(f"Timeout error in set_leverage for {symbol}")
@@ -299,16 +296,11 @@ def timeframe_to_milliseconds(timeframe):
     return mapping.get(timeframe, 60 * 1000)
 
 def fetch_ohlcv_sync(exchange, symbol, timeframe, since, limit):
-    """
-    Синхронный вызов для получения OHLCV данных.
-    """
+    """Synchronous call to fetch OHLCV data."""
     return exchange.fetch_ohlcv(symbol, timeframe, since, limit)
 
 async def fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candles, retries, executor):
-    """
-    Асинхронная функция для получения OHLCV данных.
-    Она вызывает синхронную функцию fetch_ohlcv_sync через run_in_executor.
-    """
+    """Fetch OHLCV data asynchronously using ``fetch_ohlcv_sync`` in a thread."""
     interval = timeframe_to_milliseconds(timeframe)
     current_timestamp = exchange.milliseconds()
     since = current_timestamp - total_candles * interval
@@ -353,10 +345,7 @@ async def fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candl
 
 @retry_on_failure()
 def fetch_data(api_key, api_secret, base_url, symbol, timeframe='5m', limit=1000, total_candles=2000, retries=5, data_dir="data"):
-    """
-    Синхронная функция для получения данных.
-    Внутри она запускает асинхронную функцию с asyncio.run().
-    """
+    """Synchronous wrapper that fetches data via an async helper."""
     exchange = create_bybit_client(api_key, api_secret, base_url)
     executor = ThreadPoolExecutor(max_workers=5)
 
@@ -374,8 +363,8 @@ def fetch_data(api_key, api_secret, base_url, symbol, timeframe='5m', limit=1000
             try:
                 ohlcv_df.to_csv(candles_file, index=False)
             except Exception as e:
-                logging.error(f"Ошибка при сохранении данных в файл для {symbol}: {e}")
-                raise APIRequestError(f"Ошибка при сохранении данных в файл: {e}")
+                logging.error(f"Error saving data to file for {symbol}: {e}")
+                raise APIRequestError(f"Error saving data to file: {e}")
         return ohlcv_df
     except Exception as e:
         logging.error(f"Error fetching data for {symbol} with timeframe {timeframe}: {e}")
@@ -480,7 +469,7 @@ def set_trading_stop(base_url, api_key, api_secret, symbol, stop_loss_price=0, t
                 return result
             else:
                 raise APIRequestError(f"API Error: {result.get('retMsg')}")
-        logging.info(f"Торговый стоп установлен для {symbol}: {result}")
+        logging.info(f"Trading stop set for {symbol}: {result}")
         return result
 
     except requests.exceptions.Timeout:
