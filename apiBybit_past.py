@@ -13,10 +13,8 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
-# Настройка логирования на уровень INFO
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Session with retries for metric endpoints
 _metric_session = requests.Session()
 _metric_adapter = HTTPAdapter(
     max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
@@ -47,7 +45,6 @@ def retry_on_failure(max_attempts=5, delay=2, backoff=2):
                     attempts += 1
                     logging.error(f"APIRequestError in {func.__name__}: {e}. Attempt {attempts}/{max_attempts}")
                     if "not modified" in str(e).lower():
-                        # Специфическая ошибка, пропускаем дальнейшие попытки
                         logging.warning(f"{func.__name__}: Специфическая ошибка '{e}', пропускаем дальнейшие попытки.")
                         break
                 except Exception as e:
@@ -104,7 +101,7 @@ def get_open_position(base_url, api_key, api_secret, symbol):
     try:
         endpoint = '/v5/position/list'
         params = {
-            'category': 'linear',  # Возможно, потребуется динамическая настройка в зависимости от типа контракта
+            'category': 'linear',
             'symbol': symbol,
             'api_key': api_key,
             'timestamp': int(time.time() * 1000)
@@ -121,7 +118,6 @@ def get_open_position(base_url, api_key, api_secret, symbol):
         
         for position in position_list:
             if position.get('symbol') == symbol and float(position.get('size', '0')) > 0:
-                # Приводим unrealisedPnl к float, если он присутствует
                 if 'unrealisedPnl' in position:
                     try:
                         position['unrealisedPnl'] = float(position['unrealisedPnl'])
@@ -175,12 +171,10 @@ def place_order(base_url, api_key, api_secret, symbol, side, qty, order_type="Ma
         'timestamp': int(time.time() * 1000)
     }
     params['sign'] = generate_signature(params, api_secret)
-    # Удалено: логирование запроса
     try:
         response = requests.post(base_url + endpoint, json=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             raise APIRequestError(f"API error: {result.get('retMsg')}")
@@ -198,18 +192,16 @@ def switch_to_cross_margin(base_url, api_key, api_secret, symbol):
     try:
         endpoint = '/v5/position/switch-mode'
         params = {
-            'category': 'linear',  # Возможно, потребуется динамическая настройка
+            'category': 'linear',
             'symbol': symbol,
-            'mode': 0,  # 0: Merged Single (One-Way), 3: Both Sides (Hedge)
+            'mode': 0,
             'api_key': api_key,
             'timestamp': int(time.time() * 1000)
         }
         params['sign'] = generate_signature(params, api_secret)
-        # Удалено: логирование запроса
         response = requests.post(base_url + endpoint, json=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             ret_msg = result.get('retMsg', '').lower()
@@ -232,13 +224,12 @@ def switch_to_cross_margin(base_url, api_key, api_secret, symbol):
 @retry_on_failure()
 def set_leverage(base_url, api_key, api_secret, symbol, desired_leverage, default_leverage=30):
     try:
-        # Установка плеча 20 для специфических символов
         if symbol in ["TONUSDT", "TRXUSDT"]:
             desired_leverage = 20
 
         endpoint = '/v5/position/set-leverage'
         params = {
-            'category': 'linear',  # Возможно, потребуется динамическая настройка
+            'category': 'linear',
             'symbol': symbol,
             'buyLeverage': str(desired_leverage),
             'sellLeverage': str(desired_leverage),
@@ -246,11 +237,9 @@ def set_leverage(base_url, api_key, api_secret, symbol, desired_leverage, defaul
             'timestamp': int(time.time() * 1000)
         }
         params['sign'] = generate_signature(params, api_secret)
-        # Удалено: логирование запроса
         response = requests.post(base_url + endpoint, json=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             ret_msg = result.get('retMsg', '').lower()
@@ -322,7 +311,6 @@ async def fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candl
     """
     interval = timeframe_to_milliseconds(timeframe)
     current_timestamp = exchange.milliseconds()
-    # Начинаем с нужного момента
     since = current_timestamp - total_candles * interval
     all_ohlcv = []
     last_timestamp = None
@@ -332,28 +320,25 @@ async def fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candl
         data_fetched = False
         for attempt in range(retries):
             try:
-                # Вызываем синхронную функцию в пуле потоков
                 ohlcv = await loop.run_in_executor(
                     executor, fetch_ohlcv_sync, exchange, symbol, timeframe, since, limit
                 )
                 if not ohlcv:
                     logging.warning(f"No data for {symbol} on attempt {attempt + 1}")
-                    break  # Если данных нет, пробуем следующий батч
                 if last_timestamp is not None and ohlcv[0][0] <= last_timestamp:
-                    break  # Пропускаем дубликаты
+                    break
                 all_ohlcv.extend(ohlcv)
-                last_timestamp = ohlcv[-1][0]  # Обновляем последний полученный таймстамп
+                last_timestamp = ohlcv[-1][0]
                 since = last_timestamp + 1
                 data_fetched = True
-                await asyncio.sleep(0.005)  # Небольшая пауза
-                break  # Выходим из цикла попыток
+                await asyncio.sleep(0.005)
+                break
             except Exception as e:
                 logging.error(f"Error fetching data on attempt {attempt + 1}/{retries}: {e} for {symbol}")
                 await asyncio.sleep(0.005)
-        if not data_fetched:  # Если ни одна попытка не удалась, двигаем since
+        if not data_fetched:
             since += interval
 
-    # Если получили больше данных, чем нужно — обрезаем
     all_ohlcv = all_ohlcv[:total_candles]
 
     if not all_ohlcv:
@@ -363,7 +348,6 @@ async def fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candl
     df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms').dt.tz_localize('UTC')
     df.set_index('timestamp', inplace=True)
-    # Если требуется, можно удалить последнюю свечу
     df = df.iloc[:-1]
     return df
 
@@ -374,18 +358,15 @@ def fetch_data(api_key, api_secret, base_url, symbol, timeframe='5m', limit=1000
     Внутри она запускает асинхронную функцию с asyncio.run().
     """
     exchange = create_bybit_client(api_key, api_secret, base_url)
-    # Создаем пул потоков для параллельного выполнения синхронных вызовов
-    executor = ThreadPoolExecutor(max_workers=5)  # можно настроить число воркеров
+    executor = ThreadPoolExecutor(max_workers=5)
 
     try:
-        # Запускаем асинхронную функцию для получения OHLCV данных
         ohlcv_df = asyncio.run(
             fetch_ohlcv_data_async(exchange, symbol, timeframe, limit, total_candles, retries, executor)
         )
         if ohlcv_df.empty:
             logging.warning(f"Fetched OHLCV data is empty for {symbol} with timeframe {timeframe}")
         else:
-            # Приводим индекс к UTC и сохраняем в CSV
             ohlcv_df.index = pd.to_datetime(ohlcv_df.index).tz_convert('UTC')
             ohlcv_df.reset_index(inplace=True)
             symbol_dir = create_symbol_dir(data_dir, symbol)
@@ -401,34 +382,6 @@ def fetch_data(api_key, api_secret, base_url, symbol, timeframe='5m', limit=1000
         raise APIRequestError(f"Error fetching data: {e}")
     finally:
         executor.shutdown(wait=False)
-
-def _fetch_bybit_paged(endpoint: str, params: dict, data_key: str) -> list:
-    records = []
-    cursor = None
-    while True:
-        if cursor:
-            params["cursor"] = cursor
-        try:
-            resp = _metric_session.get(endpoint, params=params, timeout=10)
-            resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Metric request failed: {e}")
-            raise APIRequestError(f"Metric request failed: {e}")
-        data = resp.json()
-        if data.get("retCode") != 0:
-            msg = data.get('retMsg')
-            logging.error(f"Bybit error {msg}")
-            raise APIRequestError(f"Bybit API error: {msg}")
-        result = data.get("result", {})
-        lst = result.get(data_key, [])
-        if not lst:
-            break
-        records.extend(lst)
-        cursor = result.get("nextPageCursor")
-        if not cursor:
-            break
-        time.sleep(0.2)
-    return records
 
 
 def fetch_data_with_metrics(api_key, api_secret, base_url, symbol, timeframe='5m', limit=1000, total_candles=2000, retries=5, data_dir="data"):
@@ -511,24 +464,19 @@ def set_trading_stop(base_url, api_key, api_secret, symbol, stop_loss_price=0, t
         params['tpOrderType'] = 'Market'
         params['slOrderType'] = 'Market'
 
-    # Добавляем аутентификационные параметры всегда
     params['api_key'] = api_key
     params['timestamp'] = int(time.time() * 1000)
     params['sign'] = generate_signature(params, api_secret)
-
-    # Удалено: логирование параметров запроса
 
     try:
         response = requests.post(base_url + endpoint, json=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             ret_msg = result.get('retMsg', '').lower()
             if "trading stop already exists" in ret_msg:
                 logging.warning(f"set_trading_stop: {result.get('retMsg')}")
-                # Не считаем это критической ошибкой
                 return result
             else:
                 raise APIRequestError(f"API Error: {result.get('retMsg')}")
@@ -551,11 +499,9 @@ def get_min_order_size(base_url, symbol):
         try:
             endpoint = '/v5/market/instruments-info'
             params = {'category': 'linear', 'symbol': symbol}
-            # Удалено: логирование запроса
             response = requests.get(base_url + endpoint, params=params, timeout=10)
             response.raise_for_status()
             symbols_info = response.json()
-            # Удалено: логирование ответа
             for info in symbols_info.get('result', {}).get('list', []):
                 if info.get('symbol') == symbol:
                     min_order_qty = float(info['lotSizeFilter']['minOrderQty'])
@@ -579,11 +525,9 @@ def get_max_qty(base_url, symbol):
         try:
             endpoint = '/v5/market/instruments-info'
             params = {'category': 'linear', 'symbol': symbol}
-            # Удалено: логирование запроса
             response = requests.get(base_url + endpoint, params=params, timeout=10)
             response.raise_for_status()
             instruments_info = response.json()
-            # Удалено: логирование ответа
 
             for info in instruments_info.get('result', {}).get('list', []):
                 if info.get('symbol') == symbol:
@@ -614,11 +558,9 @@ def get_account_balance(base_url, api_key, api_secret):
             'recv_window': 5000
         }
         params['sign'] = generate_signature(params, api_secret)
-        # Удалено: логирование запроса
         response = requests.get(base_url + endpoint, params=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             raise APIRequestError(f"API Error: {result.get('retMsg')}")
@@ -630,12 +572,10 @@ def get_account_balance(base_url, api_key, api_secret):
                     if available_str:
                         available = float(available_str)
                     else:
-                        # Если availableToWithdraw пусто, используем walletBalance
                         available_str = coin.get('walletBalance', '0')
                         if available_str:
                             available = float(available_str)
                         else:
-                            # Если и walletBalance пусто, устанавливаем 0
                             available = 0.0
                     return available
 
@@ -675,64 +615,14 @@ def open_position_api(base_url, api_key, api_secret, symbol, side, qty, default_
             'timestamp': int(time.time() * 1000)
         }
         params['sign'] = generate_signature(params, api_secret)
-        # Удалено: логирование запроса
         response = requests.post(base_url + endpoint, json=params, timeout=10)
         response.raise_for_status()
         result = response.json()
-        # Удалено: логирование ответа
 
         if result.get('retCode') != 0:
             raise APIRequestError(f"API error: {result.get('retMsg')}")
 
         logging.info(f"Position opened for {symbol}: {result}")
-
-        # try:
-        #     exchange = create_bybit_client(api_key, api_secret, base_url)
-        #     current_price = exchange.fetch_ticker(symbol)['last']
-        # except Exception as e:
-        #     logging.error(f"Error fetching current price: {e}")
-        #     current_price = 0.0
-
-        # df = fetch_data(api_key, api_secret, base_url, symbol, '30m', limit=1000, total_candles=1000)
-
-        # atr = calculate_atr(df)
-
-        # if atr.empty:
-        #     logging.error(f"ATR calculation returned empty Series for {symbol}. Skipping trading stop setup.")
-        #     return result
-
-        # latest_atr = atr.iloc[-1]
-        # stop_loss_price = current_price - (default_config["STOP_LOSS"] * latest_atr) if side.lower() == 'buy' else current_price + (default_config["STOP_LOSS"] * latest_atr)
-        # take_profit_price = current_price + (default_config["TAKE_PROFIT"] * latest_atr) if side.lower() == 'buy' else current_price - (default_config["TAKE_PROFIT"] * latest_atr)
-
-        # tpsl_mode = 'Full'
-
-        # if tpsl_mode == 'Partial':
-        #     tp_size = sl_size = float(qty) * 0.5
-        #     tp_limit_price = take_profit_price * 0.8
-        #     sl_limit_price = stop_loss_price * 1.2
-        # else:
-        #     tp_size = sl_size = None
-        #     tp_limit_price = sl_limit_price = None
-
-        # trailing_stop = default_config.get("TRAILING_STOP_PERCENT", 0.02) * current_price if default_config.get("USE_TRAILING_STOP", False) else 0
-
-        # set_trading_stop(
-        #     base_url=base_url,
-        #     api_key=api_key,
-        #     api_secret=api_secret,
-        #     symbol=symbol,
-        #     stop_loss_price=stop_loss_price,
-        #     take_profit_price=take_profit_price,
-        #     trailing_stop=trailing_stop,
-        #     tpsl_mode=tpsl_mode,
-        #     tp_size=tp_size,
-        #     sl_size=sl_size,
-        #     tp_limit_price=tp_limit_price,
-        #     sl_limit_price=sl_limit_price,
-        #     default_config=default_config
-        # )
-
         return result
 
     except Exception as e:
@@ -741,7 +631,6 @@ def open_position_api(base_url, api_key, api_secret, symbol, side, qty, default_
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    # Пример использования:
     api_key = "1"
     api_secret = "2"
     base_url = "https://api.bybit.com"
