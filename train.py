@@ -25,8 +25,6 @@ def split_by_item(df: pd.DataFrame, test_ratio: float = 0.2):
     train_parts, test_parts = [], []
     for _, group in df.groupby("item_id"):
         group = group.sort_values('timestamp')
-        if len(group) < 50: 
-            continue
         split_idx = int(len(group) * (1 - test_ratio))
         train_parts.append(group.iloc[:split_idx])
         test_parts.append(group.iloc[split_idx:])

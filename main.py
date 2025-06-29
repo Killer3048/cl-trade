@@ -30,7 +30,7 @@ from apiBybit_past import (
     calculate_atr
 )
 
-from moment_classifier import MomentClassifier
+from prediction_manager import PredictionManager
 
 # ---------------------------------------------------------------------------
 # Load configuration from config.json
@@ -84,7 +84,7 @@ logging.basicConfig(
 )
 
 
-GLOBAL_MODEL_LONG_TF: MomentClassifier = None
+PREDICTION_MANAGER: PredictionManager | None = None
 
 GLOBAL_SIGNALS_LONG_TF = {}
 
@@ -96,7 +96,7 @@ GLOBAL_SIGNALS_UPDATE_EVENT = asyncio.Event()
 ALL_BOTS = []
 
 def init_models_once():
-    global GLOBAL_MODEL_LONG_TF
+    global PREDICTION_MANAGER
 
     long_config = TIMEFRAME_CONFIG["LONG_TF"]
 
@@ -108,10 +108,13 @@ def init_models_once():
             "prediction_length": long_config.get("prediction_length", 1),
             "all_time_retrain": ALL_TIME_RETRAIN,
         }
-        model_long_tf = MomentClassifier(config_long_tf)
-        model_long_tf.load_model()
+        manager = PredictionManager(config_long_tf)
+        manager.start()
+        manager.ready.wait()
+        if manager.model is None:
+            raise RuntimeError("PredictionManager failed to initialize")
 
-        GLOBAL_MODEL_LONG_TF = model_long_tf
+        PREDICTION_MANAGER = manager
         logging.info("LONG_TF модель успешно загружена.")
         return True
 
@@ -161,13 +164,13 @@ async def get_signals_for_all_symbols(symbols):
     long_config = TIMEFRAME_CONFIG["LONG_TF"]
 
     async def fetch_and_process_long():
-        if GLOBAL_MODEL_LONG_TF is None:
+        if PREDICTION_MANAGER is None:
             return {sym: "NEUTRAL" for sym in symbols}
         async with GLOBAL_PREDICT_SEMAPHORE:
             candles = 12000 if ALL_TIME_RETRAIN else 4000
             df = await fetch_market_data_for_symbols(symbols, long_config["interval"], total_candles=candles)
         if not df.empty:
-            return GLOBAL_MODEL_LONG_TF.predict(df)
+            return await PREDICTION_MANAGER.predict(df)
         else:
             return {sym: "NEUTRAL" for sym in symbols}
 
@@ -1000,6 +1003,9 @@ if __name__ == "__main__":
         logging.info("Инициируем остановку всех ботов...")
         for bot in ALL_BOTS:
             bot.stop()
+
+        if PREDICTION_MANAGER:
+            PREDICTION_MANAGER.stop()
 
         shutdown_timeout = 35
         ws_thread.join(timeout=shutdown_timeout)

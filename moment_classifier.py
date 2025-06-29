@@ -91,7 +91,7 @@ class MomentClassifier:
             
             logger.info(f"Model saved in {time.time() - start_time:.2f} seconds.")
 
-    def _build_sequences(self, df: pd.DataFrame, purpose: str) -> tuple[np.ndarray, np.ndarray, list]:
+    def _build_sequences(self, df: pd.DataFrame, purpose: str = "training") -> tuple[np.ndarray, np.ndarray, list]:
         if df.empty:
             logger.warning(f"Input DataFrame for _build_sequences (purpose: {purpose}) is empty! Cannot generate sequences.")
             return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
@@ -162,7 +162,7 @@ class MomentClassifier:
         self.moment.to(device)
         optimizer = torch.optim.Adam(self.moment.parameters(), lr=self.lr)
         criterion = torch.nn.CrossEntropyLoss()
-        scaler = GradScaler(device_type=device, enabled=(device == 'cuda'))
+        scaler = GradScaler(enabled=(device == 'cuda'))
         
         best_val_acc = 0.0
         patience = 0
@@ -247,7 +247,8 @@ class MomentClassifier:
         logger.info(f"Starting prediction for {df['item_id'].nunique()} items...")
         result = {sid: "NEUTRAL" for sid in df["item_id"].unique()}
 
-        if self.moment is None: return result
+        if self.moment is None or not self.is_trained:
+            return result
         
         X, _, item_ids = self._build_sequences(df, purpose="prediction")
         if X.size == 0: return result
