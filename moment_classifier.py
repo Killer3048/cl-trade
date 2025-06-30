@@ -115,7 +115,7 @@ class MomentClassifier:
             group['rsi'] = ta.momentum.RSIIndicator(close=group['close']).rsi()
             group['cci'] = ta.trend.CCIIndicator(high=group['high'], low=group['low'], close=group['close']).cci()
             # ИСПРАВЛЕНИЕ: метод называется mfi(), а не money_flow_index()
-            group['mfi'] = ta.volume.MFIIndicator(high=group['high'], low=group['low'], close=group['close'], volume=group['volume']).mfi()
+            group['mfi'] = ta.volume.MFIIndicator(high=group['high'], low=group['low'], close=group['close'], volume=group['volume']).money_flow_index()
             group['adx'] = ta.trend.ADXIndicator(high=group['high'], low=group['low'], close=group['close']).adx()
             macd = ta.trend.MACD(close=group['close'])
             group['macd'] = macd.macd()
