@@ -2,7 +2,7 @@
   "api_key": "lF9NRgJr5v5WWCYg7n",
   "api_secret": "XpXnbcZIErzmrq1FbTbAsAmCjXqEhDLyBQmT",
   "base_url": "https://api-demo.bybit.com",
-  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT", "LINKUSDT"],
+  "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT", "ADAUSDT", "DOGEUSDT", "TRXUSDT", "OPUSDT"],
   "leverage": {
     "default": 30,
     "BTCUSDT": 100,
@@ -15,7 +15,8 @@
       "candles_to_trade": 1,
       "prediction_length": 1,
       "results_output_dir": "1h_4pred",
-      "batch_size": 128
+      "batch_size": 128,
+      "num_val_windows": 5
     }
   },
   "all_time_retrain": false,

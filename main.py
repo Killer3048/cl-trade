@@ -45,13 +45,8 @@ TIMEFRAME_CONFIG = CONFIG.get("timeframe_config", {
         "results_output_dir": "1h_4pred",
     }
 })
-RECALCULATION_AFTER_REPEATED_SIGNAL = CONFIG.get(
-    "recalc_after_repeated_signal", True
-)
-CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get(
-    "cryptocompare_api_key",
-    ""
-)
+RECALCULATION_AFTER_REPEATED_SIGNAL = CONFIG.get("recalc_after_repeated_signal", True)
+CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get("cryptocompare_api_key", "")
 NEWS_LIMIT = CONFIG.get("news", {}).get("limit", 100)
 NEWS_TIMEOUT = CONFIG.get("news", {}).get("timeout", 20)
 MAIN_COINS = CONFIG.get("main_coins", ["BTCUSDT", "ETHUSDT"])
@@ -103,6 +98,7 @@ def init_models_once():
             "results_output_dir": long_config.get("results_output_dir", "1h_4pred"),
             "model_name": long_config.get("model_name", "AutonLab/MOMENT-1-large"),
             "prediction_length": long_config.get("prediction_length", 1),
+            "num_val_windows": long_config.get("num_val_windows", 5),
             "all_time_retrain": ALL_TIME_RETRAIN,
         }
         manager = PredictionManager(config_long_tf)
@@ -357,18 +353,18 @@ class WebSocketManager:
              )
              future = asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
              try:
-                 future.result(timeout=5)
-                  logging.info(
-                      f"WebSocketManager ({self.symbol}, {self.interval_str}): WebSocket closed successfully."
-                  )
+                future.result(timeout=5)
+                logging.info(
+                    f"WebSocketManager ({self.symbol}, {self.interval_str}): WebSocket closed successfully."
+                )
              except asyncio.TimeoutError:
-                  logging.warning(
-                      f"WebSocketManager ({self.symbol}, {self.interval_str}): Timeout while closing WebSocket."
-                  )
+                logging.warning(
+                    f"WebSocketManager ({self.symbol}, {self.interval_str}): Timeout while closing WebSocket."
+                )
              except Exception as e:
-                  logging.error(
-                      f"WebSocketManager ({self.symbol}, {self.interval_str}): Error closing WebSocket: {e}"
-                  )
+                logging.error(
+                    f"WebSocketManager ({self.symbol}, {self.interval_str}): Error closing WebSocket: {e}"
+                )
         elif self.loop and self.loop.is_running():
              self.loop.call_soon_threadsafe(self.loop.stop)
              logging.info(

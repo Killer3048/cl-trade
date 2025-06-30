@@ -45,9 +45,9 @@ def retry_on_failure(max_attempts=5, delay=2, backoff=2):
                     attempts += 1
                     logging.error(f"APIRequestError in {func.__name__}: {e}. Attempt {attempts}/{max_attempts}")
                     if "not modified" in str(e).lower():
-                    logging.warning(
-                        f"{func.__name__}: Specific error '{e}', skipping further retries."
-                    )
+                        logging.warning(
+                            f"{func.__name__}: Specific error '{e}', skipping further retries."
+                        )
                         break
                 except Exception as e:
                     attempts += 1
@@ -72,9 +72,9 @@ def retry_async(max_attempts=5, delay=2, backoff=2):
                     attempts += 1
                     logging.error(f"APIRequestError in {func.__name__}: {e}. Attempt {attempts}/{max_attempts}")
                     if "not modified" in str(e).lower():
-                    logging.warning(
-                        f"{func.__name__}: Specific error '{e}', skipping further retries."
-                    )
+                        logging.warning(
+                            f"{func.__name__}: Specific error '{e}', skipping further retries."
+                        )
                         break
                 except Exception as e:
                     attempts += 1

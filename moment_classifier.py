@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from momentfm import MOMENTPipeline
 from torch.amp import autocast, GradScaler
 from safetensors.torch import load_file
+import ta
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ class MomentClassifier:
         self.batch_size = config.get("batch_size", 32)
         self.num_batches_per_epoch = config.get("num_batches_per_epoch", 50)
         self.early_stopping = config.get("early_stopping", 20)
-        self.lr = config.get("lr", 1e-4)
+        self.max_lr = config.get("max_lr", 1e-4)
+        self.weight_decay = config.get("weight_decay", 1e-2)
         self.compile_model = config.get("compile_model", True)
         self.save_on_improve = config.get("save_on_improve", False)
         self.all_time_retrain = config.get("all_time_retrain", False)
@@ -35,7 +37,7 @@ class MomentClassifier:
         
         logger.info(
             f"MomentClassifier initialized. Seq Len: {self.seq_len}, Pred Len: {self.pred_len}, "
-            f"Num Val Windows: {self.num_val_windows}, Full Retrain: {self.all_time_retrain}"
+            f"Epochs: {self.epochs}, Max LR: {self.max_lr}, Weight Decay: {self.weight_decay}"
         )
 
     def load_model(self):
@@ -44,7 +46,7 @@ class MomentClassifier:
         start_time = time.time()
         os.makedirs(self.results_output_dir, exist_ok=True)
         
-        model_kwargs = {"task_name": "classification", "n_channels": 5, "num_class": 2}
+        model_kwargs = {"task_name": "classification", "n_channels": 6, "num_class": 2}
         
         try:
             logger.info(f"Step 1: Creating model skeleton from '{self.model_name}' with custom classification head.")
@@ -93,20 +95,50 @@ class MomentClassifier:
             logger.info(f"Model saved in {time.time() - start_time:.2f} seconds.")
 
     def _build_sequences(self, df: pd.DataFrame, purpose: str = "training") -> tuple[np.ndarray, np.ndarray, list]:
-        """Convert a DataFrame into model input sequences."""
+        """Convert a DataFrame into model input sequences using technical indicators."""
         if df.empty:
             logger.warning(f"Input DataFrame for _build_sequences (purpose: {purpose}) is empty! Cannot generate sequences.")
-            return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
+            return np.empty((0, 6, self.seq_len), np.float32), np.empty((0,), np.int64), []
 
         logger.info(f"Building sequences for '{purpose}'. Input df shape: {df.shape}, Unique items: {df['item_id'].nunique()}.")
         start_time = time.time()
+
+        # --- ИЗМЕНЕНИЕ: Реструктурирован процесс расчета индикаторов ---
         
+        # 1. Сначала рассчитываем индикаторы для каждой группы, но НЕ удаляем NaN
         df = df.sort_values(["item_id", "timestamp"])
+        df_with_ta_list = []
+        feature_columns = ['rsi', 'cci', 'mfi', 'adx', 'macd', 'macd_signal']
+        
+        for _, group in df.groupby("item_id"):
+            group = group.copy()
+            group['rsi'] = ta.momentum.RSIIndicator(close=group['close']).rsi()
+            group['cci'] = ta.trend.CCIIndicator(high=group['high'], low=group['low'], close=group['close']).cci()
+            # ИСПРАВЛЕНИЕ: метод называется mfi(), а не money_flow_index()
+            group['mfi'] = ta.volume.MFIIndicator(high=group['high'], low=group['low'], close=group['close'], volume=group['volume']).mfi()
+            group['adx'] = ta.trend.ADXIndicator(high=group['high'], low=group['low'], close=group['close']).adx()
+            macd = ta.trend.MACD(close=group['close'])
+            group['macd'] = macd.macd()
+            group['macd_signal'] = macd.macd_signal()
+            df_with_ta_list.append(group)
+            
+        # 2. Объединяем все группы и удаляем строки с NaN ОДИН РАЗ
+        if not df_with_ta_list:
+            logger.warning("No data after grouping, cannot proceed.")
+            return np.empty((0, 6, self.seq_len), np.float32), np.empty((0,), np.int64), []
+            
+        processed_df = pd.concat(df_with_ta_list)
+        processed_df.dropna(inplace=True)
+        processed_df = processed_df.reset_index(drop=True)
+        
+        logger.info(f"DataFrame with indicators calculated. Shape after dropna: {processed_df.shape}")
+        
+        # 3. Теперь строим последовательности из очищенного и полного DataFrame
         X_list, y_list, item_ids = [], [], []
         
-        for item_id, group in df.groupby("item_id"):
+        for item_id, group in processed_df.groupby("item_id"):
             group_len = len(group)
-            feats = group[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float32).T
+            feats = group[feature_columns].to_numpy(dtype=np.float32).T
             closes = group["close"].to_numpy(dtype=np.float32)
 
             if purpose == "training":
@@ -114,7 +146,7 @@ class MomentClassifier:
                 if group_len < required_len:
                     logger.warning(f"Skipping '{item_id}' for training: not enough data. Have {group_len}, need {required_len}.")
                     continue
-                for i in range(len(closes) - required_len + 1):
+                for i in range(group_len - required_len + 1):
                     X_list.append(feats[:, i : i + self.seq_len])
                     y_list.append(1 if closes[i + required_len - 1] > closes[i + self.seq_len - 1] else 0)
             
@@ -137,6 +169,10 @@ class MomentClassifier:
                     end_idx_x = -self.pred_len - i
                     start_idx_x = end_idx_x - self.seq_len
                     
+                    if start_idx_x < -group_len:
+                        logger.warning(f"Not enough history for validation window {i+1} in '{item_id}'. Stopping window generation for this item.")
+                        break
+
                     seq = feats[:, start_idx_x : (end_idx_x if end_idx_x != 0 else None)]
                     
                     target_close_idx = -1 - i
@@ -149,7 +185,7 @@ class MomentClassifier:
 
         if not X_list:
             logger.warning(f"No sequences were generated for purpose '{purpose}' from the provided data.")
-            return np.empty((0, 5, self.seq_len), np.float32), np.empty((0,), np.int64), []
+            return np.empty((0, 6, self.seq_len), np.float32), np.empty((0,), np.int64), []
         
         X = np.stack(X_list)
         y = np.array(y_list, dtype=np.int64) if y_list else np.empty((0,), dtype=np.int64)
@@ -186,14 +222,20 @@ class MomentClassifier:
             val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
         
         self.moment.to(device)
-        optimizer = torch.optim.Adam(self.moment.parameters(), lr=self.lr)
+        optimizer = torch.optim.AdamW(self.moment.parameters(), lr=self.max_lr, weight_decay=self.weight_decay)
         criterion = torch.nn.CrossEntropyLoss()
         scaler = GradScaler(enabled=(device == 'cuda'))
+        
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=self.max_lr,
+            epochs=self.epochs,
+            steps_per_epoch=self.num_batches_per_epoch
+        )
         
         best_val_acc = 0.0
         patience = 0
         best_model_state_dict: Dict[str, Any] | None = None
-        
         data_iterator = iter(dataloader)
 
         for epoch in range(self.epochs):
@@ -202,7 +244,7 @@ class MomentClassifier:
             total_correct, total_samples = 0, 0
             logger.info(f"--- Starting Epoch {epoch + 1}/{self.epochs} (Patience: {patience}/{self.early_stopping}) ---")
             
-            for _ in range(self.num_batches_per_epoch):
+            for i in range(self.num_batches_per_epoch):
                 try: batch_x, batch_y = next(data_iterator)
                 except StopIteration:
                     data_iterator = iter(dataloader)
@@ -219,11 +261,14 @@ class MomentClassifier:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                scheduler.step()
                 
                 total_correct += (out.logits.argmax(dim=1) == batch_y).sum().item()
                 total_samples += batch_y.size(0)
             
-            logger.info(f"Epoch {epoch+1} took {time.time()-epoch_start_time:.2f}s. Train Acc: {total_correct/max(1,total_samples):.4f}")
+            current_lr = scheduler.get_last_lr()[0]
+            logger.info(f"Epoch {epoch+1} took {time.time()-epoch_start_time:.2f}s. "
+                        f"Train Acc: {total_correct/max(1,total_samples):.4f}, LR: {current_lr:.6f}")
 
             if val_loader:
                 val_acc = self.evaluate_on_loader(val_loader, device, "Validation")
