@@ -14,12 +14,9 @@
       "interval": "1h",
       "candles_to_trade": 1,
       "prediction_length": 1,
-      "results_output_dir": "1h_4pred",
-      "batch_size": 128,
-      "num_val_windows": 5
+    "results_output_dir": "1h_4pred"
     }
   },
-  "all_time_retrain": false,
   "recalc_after_repeated_signal": true,
   "news": {
     "cryptocompare_api_key": "498c3e7767e15dee7f938b17b41cdbaf026c184acf76dbf0e67c84cd17587eb9",
