@@ -4,7 +4,7 @@ import queue
 from threading import Thread, Event
 from typing import Dict
 
-from moment_classifier import MomentClassifier
+from kronos_forecaster import KronosForecaster
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,13 @@ class PredictionManager(Thread):
         super().__init__(daemon=True)
         self.model_config = model_config
         self.queue: queue.Queue[_PredictionRequest | None] = queue.Queue()
-        self.model: MomentClassifier | None = None
+        self.model: KronosForecaster | None = None
         self.running = True
         self.ready = Event()
 
     def run(self) -> None:
         try:
-            self.model = MomentClassifier(self.model_config)
+            self.model = KronosForecaster(self.model_config)
             self.model.load_model()
             logger.info("PredictionManager: model loaded and ready")
         except Exception as e:

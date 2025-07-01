@@ -50,7 +50,6 @@ CRYPTOCOMPARE_API_KEY = CONFIG.get("news", {}).get("cryptocompare_api_key", "")
 NEWS_LIMIT = CONFIG.get("news", {}).get("limit", 100)
 NEWS_TIMEOUT = CONFIG.get("news", {}).get("timeout", 20)
 MAIN_COINS = CONFIG.get("main_coins", ["BTCUSDT", "ETHUSDT"])
-ALL_TIME_RETRAIN = bool(CONFIG.get("all_time_retrain", False))
 API_KEY = CONFIG.get("api_key", "")
 API_SECRET = CONFIG.get("api_secret", "")
 BASE_URL = CONFIG.get("base_url", "https://api-demo.bybit.com")
@@ -96,10 +95,8 @@ def init_models_once():
         config_long_tf = {
             "seq_len": long_config.get("seq_len", 512),
             "results_output_dir": long_config.get("results_output_dir", "1h_4pred"),
-            "model_name": long_config.get("model_name", "AutonLab/MOMENT-1-large"),
+            "model_name": long_config.get("model_name", "NeoQuasar/Kronos-mini"),
             "prediction_length": long_config.get("prediction_length", 1),
-            "num_val_windows": long_config.get("num_val_windows", 5),
-            "all_time_retrain": ALL_TIME_RETRAIN,
         }
         manager = PredictionManager(config_long_tf)
         manager.start()
@@ -164,8 +161,7 @@ async def get_signals_for_all_symbols(symbols):
         if PREDICTION_MANAGER is None:
             return {sym: "NEUTRAL" for sym in symbols}
         async with GLOBAL_PREDICT_SEMAPHORE:
-            candles = 12000 if ALL_TIME_RETRAIN else 4000
-            df = await fetch_market_data_for_symbols(symbols, long_config["interval"], total_candles=candles)
+            df = await fetch_market_data_for_symbols(symbols, long_config["interval"], total_candles=4000)
         if not df.empty:
             return await PREDICTION_MANAGER.predict(df)
         else:
