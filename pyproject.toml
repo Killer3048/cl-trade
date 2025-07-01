@@ -7,9 +7,12 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.13"
-momentfm = "0.1.4"
-scikit-learn = "*"
-gluonts = "*"
+torch = "*"
+pandas = "*"
+huggingface_hub = "*"
+einops = "*"
+safetensors = "*"
+tqdm = "*"
 
 [build-system]
 requires = ["poetry-core"]
