@@ -35,5 +35,5 @@ def test_evaluate_accuracy(tmp_path):
     f.load_model()
     df = create_df(steps=12)
     from train import evaluate_directional_accuracy
-    acc = evaluate_directional_accuracy(df, f)
+    acc = evaluate_directional_accuracy(df, f, num_val_windows=2)
     assert 0.0 <= acc <= 1.0
